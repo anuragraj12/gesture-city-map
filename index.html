@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<!--
+  Gesture City Map — a hand-controlled constellation map for any city.
+  Change the city here (data-city) or with ?city=<file name> in the URL.
+  City files live in cities/. Copy cities/_template.js to make your own.
+-->
+<html lang="en" data-city="bengaluru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gesture City Map</title>
+<meta name="description" content="A constellation map of any city that you fly with hand gestures, right in the browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<canvas id="sky" aria-label="City map"></canvas>
+<canvas id="fx" aria-hidden="true"></canvas>
+<video id="vid" playsinline muted></video>
+
+<header id="top">
+  <div id="brand" class="glass"><h1 id="title">GESTURE CITY MAP</h1><p id="subtitle"></p></div>
+  <div id="searchWrap"><input id="search" placeholder="Find a place, area or category  ( / )" autocomplete="off" aria-label="Search places"><div id="results" class="glass"></div></div>
+  <div class="btns">
+    <button id="btnHands" data-gx title="Turn on hand control (H)">✋ Hands</button>
+    <button id="btnPause" data-gx title="Pause hand control (Space)" hidden>⏸ Pause</button>
+    <button id="btnDemo" data-gx title="Watch a simulated hand use every gesture">▶ Demo</button>
+    <button id="btnReset" data-gx title="Reset view (R)">↺</button>
+    <button id="btnHelp" data-gx title="Gestures and keys (?)">?</button>
+  </div>
+</header>
+
+<aside id="legend" class="glass" aria-label="Categories"></aside>
+<section id="card" class="glass" aria-live="polite"></section>
+
+<section id="hud" class="glass" aria-live="polite">
+  <div class="cam"><canvas id="cam" width="240" height="180"></canvas><div id="camOff">camera off</div></div>
+  <div id="pose"><span id="poseIcon">✋</span><div><b id="poseName">Hand control off</b><small id="poseHint">press ✋ Hands or ▶ Demo</small></div></div>
+  <ul id="glist">
+    <li data-g="open"><i>🖐️</i>Swipe palm<span>move the map</span></li>
+    <li data-g="pinch"><i>🤏</i>Pinch out / in<span>zoom in / out</span></li>
+    <li data-g="point"><i>☝️</i>One finger<span>move pointer</span></li>
+    <li data-g="thumbsup"><i>👍</i>Thumbs up<span>open place</span></li>
+    <li data-g="fist"><i>✊</i>Fist<span>close place</span></li>
+    <li data-g="two"><i>🙌</i>Two hands<span>rotate</span></li>
+  </ul>
+</section>
+
+<div id="toast" class="glass" role="status"></div>
+<div id="demoBar" class="glass" hidden><b>DEMO</b><span id="demoCap"></span><button id="demoStop" data-gx>Stop</button></div>
+
+<div id="intro" class="ov show"><div class="panel glass">
+  <h2 id="introTitle">Fly the city with your <span>hands</span>.</h2>
+  <p class="lead" id="introLead">Every star is a place worth knowing, and every category is its own constellation. Hand tracking runs entirely in your browser, so no video ever leaves your device.</p>
+  <div class="ggrid">
+    <div class="gcard"><div class="ge">🖐️ ⇆</div><b>Swipe your palm</b><span>A quick open-hand swipe left, right, up or down moves the map that way.</span></div>
+    <div class="gcard"><div class="ge">🤏</div><b>Pinch out · pinch in</b><span>Spread thumb and index apart to zoom in, bring them together to zoom out.</span></div>
+    <div class="gcard"><div class="ge">☝️</div><b>One finger</b><span>Point to move the pointer. It snaps onto the nearest place.</span></div>
+    <div class="gcard"><div class="ge">👍</div><b>Thumbs up</b><span>Hold for a moment to open the place under the pointer.</span></div>
+    <div class="gcard"><div class="ge">✊</div><b>Fist</b><span>Hold for a moment to close the open place.</span></div>
+    <div class="gcard"><div class="ge">🙌</div><b>Two hands</b><span>Show both hands and turn them like a steering wheel to rotate.</span></div>
+  </div>
+  <div class="cta"><button id="introHands" class="pri" data-gx>✋ Turn on hand control</button><button id="introDemo" data-gx>▶ Watch the demo</button><button id="introMouse" data-gx>🖱 Explore with mouse or touch</button></div>
+  <p class="fine" id="introFine">Works best in Chrome or Edge, in good light, with your hand 40–70 cm from the camera. Pins are approximate.</p>
+</div></div>
+
+<div id="help" class="ov"><div class="panel glass">
+  <h2>Gestures <span>and keys</span></h2>
+  <div class="ggrid">
+    <div class="gcard"><div class="ge">🖐️</div><b>Open palm, still</b><span>Rest pose. Nothing happens until you swipe.</span></div>
+    <div class="gcard"><div class="ge">⏱</div><b>Holds, not flicks</b><span>Thumbs up and fist fire after about a third of a second, once per gesture. The ring around the pointer fills while you hold.</span></div>
+    <div class="gcard"><div class="ge">🎯</div><b>Click lands where you pointed</b><span>The pointer rewinds to where it was before your hand changed shape.</span></div>
+    <div class="gcard"><div class="ge">↩</div><b>Swipe back is ignored</b><span>Bringing your hand back after a swipe won't swipe the other way.</span></div>
+    <div class="gcard"><div class="ge">🙌</div><b>Two hands win</b><span>While both hands are in view, only rotation works.</span></div>
+    <div class="gcard"><div class="ge">⏸</div><b>Pause any time</b><span>Press Space or the ⏸ button.</span></div>
+  </div>
+  <div class="keys"><kbd>drag</kbd> pan · <kbd>scroll</kbd> zoom · <kbd>click</kbd> open · <kbd>Esc</kbd> close · <kbd>←↑→↓</kbd> pan · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>Q</kbd><kbd>E</kbd> rotate · <kbd>R</kbd> reset · <kbd>/</kbd> search · <kbd>H</kbd> hands · <kbd>Space</kbd> pause</div>
+  <div class="cta"><button class="closeHelp" data-gx>Close</button></div>
+</div></div>
+
+<script src="src/gestures.js"></script>
+<script src="src/synth.js"></script>
+<script>
+  // Load cities/<id>.js, then the app. Only simple file names are accepted.
+  (function () {
+    var q = new URLSearchParams(location.search).get('city');
+    var id = q || document.documentElement.dataset.city || 'bengaluru';
+    if (!/^[a-z0-9_-]+$/i.test(id)) id = 'bengaluru';
+    var s = document.createElement('script');
+    s.src = 'cities/' + id + '.js';
+    s.onload = function () { var a = document.createElement('script'); a.src = 'src/app.js'; document.body.appendChild(a); };
+    s.onerror = function () {
+      document.body.insertAdjacentHTML('beforeend', '<div class="fatal glass"><b>City not found.</b> There is no file at <code>cities/' + id + '.js</code>. Copy <code>cities/_template.js</code> to create it.</div>');
+    };
+    document.body.appendChild(s);
+  })();
+</script>
+</body>
+</html>
