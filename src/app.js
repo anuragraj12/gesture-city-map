@@ -12,6 +12,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 
 /* ============ 1. Config → map data ============ */
 const problems = [];
+const EMBED = new URLSearchParams(location.search).has('embed');   // chrome-free, self-running version for iframes
 if (!CFG) { document.body.insertAdjacentHTML('beforeend', '<div class="fatal glass"><b>No city config.</b> The city file must set <code>window.CITY_CONFIG</code>.</div>'); return; }
 const CATS = CFG.categories || {};
 const catKeys = Object.keys(CATS);
@@ -282,10 +283,11 @@ function buildDemo() {
   let from = { x: 0.5, y: 0.78 }, to = { x: 0.5, y: 0.78 }, target = null;
   const pickTarget = () => {   // a prominent visible place near the middle of the screen
     let best = null, bd = Infinity;
+    const wide = W > 820, L = wide && !EMBED ? 260 : 30, R = wide ? 300 : 30, T = EMBED ? 70 : 120, B = wide ? 140 : H * 0.5;
     for (const p of places) {
       if (S.hidden.has(p.cat) || p.rank < 2) continue;
-      const [sx, sy] = w2s(p.x, p.y); const d = Math.hypot(sx - W * 0.45, sy - H * 0.5);
-      if (sx > 260 && sx < W - 360 && sy > 120 && sy < H - 140 && d < bd) { bd = d; best = p; }
+      const [sx, sy] = w2s(p.x, p.y); const d = Math.hypot(sx - (L + W - R) / 2, sy - (T + H - B) / 2);
+      if (sx > L && sx < W - R && sy > T && sy < H - B && d < bd) { bd = d; best = p; }
     }
     return best;
   };
@@ -485,6 +487,9 @@ function loop(now) {
 
 /* ============ 11. Mouse, touch, keyboard ============ */
 let drag = null; const touches = new Map(); let pinchRef = null;
+// ?embed: the demo restarts after you stop touching it.
+let idleT = 0;
+function demoLater() { if (!EMBED) return; clearTimeout(idleT); idleT = setTimeout(() => { if (!demo && !handOn) startDemo(); }, 9000); }
 cv.addEventListener('pointerdown', e => {
   if (demo) stopDemo(); stopAnim();
   cv.setPointerCapture(e.pointerId); touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -508,9 +513,10 @@ const endPtr = e => {
   if (drag && drag.moved < 6 && e.type === 'pointerup') { const p = pickPlace(e.clientX, e.clientY, 26); select(p); }
   if (touches.size < 2) pinchRef = null;
   if (!touches.size) drag = null;
+  demoLater();
 };
 cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr);
-cv.addEventListener('wheel', e => { e.preventDefault(); stopAnim(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+cv.addEventListener('wheel', e => { e.preventDefault(); stopAnim(); if (demo) stopDemo(); demoLater(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 
 addEventListener('keydown', e => {
   if (e.target === search) return;
@@ -541,7 +547,7 @@ $('#btnHelp').onclick = () => $('#help').classList.add('show');
 $('#introHands').onclick = startHands;
 $('#introDemo').onclick = startDemo;
 $('#introMouse').onclick = closeOverlays;
-$('#demoStop').onclick = stopDemo;
+$('#demoStop').onclick = () => { stopDemo(); demoLater(); };
 document.querySelectorAll('.closeHelp').forEach(b => b.onclick = closeOverlays);
 document.querySelectorAll('.ov').forEach(o => o.addEventListener('click', e => { if (e.target === o) closeOverlays(); }));
 
@@ -550,7 +556,8 @@ addEventListener('resize', resize);
 resize(); buildLegend(); drawCam([], 'none');
 if (problems.length) toast(`City config: ${problems.length} problem${problems.length > 1 ? 's' : ''}. See the browser console.`, 5000);
 const qs = new URLSearchParams(location.search);
-if (qs.has('demo')) startDemo();
+if (EMBED) { document.body.classList.add('embed'); closeOverlays(); startDemo(); }
+else if (qs.has('demo')) startDemo();
 requestAnimationFrame(loop);
 window.GestureCityMap = { view, places, engine, onHands, startDemo, stopDemo, select, home, w2s };
 })();

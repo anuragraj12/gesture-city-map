@@ -4,7 +4,7 @@
 
 ![Demo: a simulated hand swiping, pointing, opening a place, zooming and rotating the Bengaluru map](docs/demo.gif)
 
-**[Live demo](https://anuragraj12.github.io/gesture-city-map/)** · [London example](https://anuragraj12.github.io/gesture-city-map/?city=london) · [Watch the demo](https://anuragraj12.github.io/gesture-city-map/?demo) (no camera needed)
+**[Live demo](https://anurag12.vercel.app/map)** · [London example](https://anurag12.vercel.app/map?city=london) · [Watch the demo](https://anurag12.vercel.app/map?demo) (no camera needed)
 
 No install, no build step, no server code. Hand tracking runs on your device with [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker), so no video ever leaves your browser.
 
@@ -60,6 +60,12 @@ node tools/csv-to-city.mjs my-places.csv --name "Pune" > cities/pune.js
 
 - **On GitHub Pages:** fork this repo, then go to *Settings → Pages* and pick `main` / root. Your map is live at `https://<you>.github.io/gesture-city-map/`.
 - **Locally:** any static server works, for example `npx serve` or `python3 -m http.server`, then open `http://localhost:8000`. The camera needs `https://` or `localhost`.
+
+**Embed it** on another page with an iframe. `?embed` hides the toolbar and plays the demo on a loop:
+
+```html
+<iframe src="https://<you>.github.io/gesture-city-map/?embed" width="100%" height="520" style="border:0"></iframe>
+```
 
 Hand tracking works best in Chrome or Edge, in good light, with your hand 40–70 cm from the camera.
 
