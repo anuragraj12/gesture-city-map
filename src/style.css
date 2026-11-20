@@ -156,6 +156,14 @@ button.ghost{background:transparent}
 .spanel .fine{text-align:left}
 body.embed #unlock{display:none}
 
+/* my location */
+#btnLocate{position:fixed;right:290px;bottom:14px;width:46px;height:46px;padding:0;border-radius:50%;display:grid;place-items:center;color:var(--dim);z-index:5}
+#btnLocate svg{display:block}
+#btnLocate.on{color:#4285f4;border-color:rgba(66,133,244,.6);box-shadow:0 0 16px rgba(66,133,244,.35)}
+#btnLocate.busy svg{animation:locpulse 1s ease-in-out infinite;color:#4285f4}
+@keyframes locpulse{50%{opacity:.3}}
+body.embed #btnLocate{display:none}
+
 @media (max-width:820px){
   /* compact header: title + buttons on one row, search below */
   #top{flex-wrap:wrap;top:10px;left:10px;right:10px;gap:8px}
@@ -180,6 +188,7 @@ body.embed #unlock{display:none}
   #demoBar #demoCap{flex:1;min-width:0}
   #card{left:10px;right:10px;width:auto;top:auto;bottom:10px;max-height:56%;overflow:auto;z-index:6}
   #hud{display:none}
+  #btnLocate{right:10px;bottom:66px}
   .xpanel,.spanel{padding:20px 16px}.xlv h2{font-size:24px}.xpts b{font-size:32px}
   .xhead{padding-right:40px}.xstats span{min-width:0;padding:7px 8px;font-size:11px}.xstats b{font-size:14px}
   .xbadges{grid-template-columns:1fr}

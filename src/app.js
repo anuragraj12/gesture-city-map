@@ -441,6 +441,7 @@ function draw(now) {
     occ.push([bx, by, w, 16]);
     ctx.fillStyle = pri >= 9 ? '#ffffff' : 'rgba(232,236,255,.78)'; ctx.fillText(p.name, bx, y);
   }
+  drawMe(now);
   drawFx(now);
 }
 function drawFx(now) {
@@ -676,6 +677,54 @@ function openShare(badge) {
   closeOverlays(); $('#share').classList.add('show');
 }
 
+
+/* ============ 9c. My location: the blue dot ============ */
+const me = { on: false, watch: null, have: false, first: false, x: 0, y: 0, acc: 0 };
+function locate() {
+  if (!navigator.geolocation) { toast('Location isn’t available in this browser.'); return; }
+  if (me.on && me.have) {   // already showing: tap to recentre, tap again when centred to stop
+    const [sx, sy] = w2s(me.x, me.y);
+    if (Math.hypot(sx - W / 2, sy - H / 2) < 30) stopLocate(); else flyToMe();
+    return;
+  }
+  if (me.on) return;   // still finding you
+  me.on = true; me.first = true; setLocBtn('busy');
+  me.watch = navigator.geolocation.watchPosition(onPos, onPosErr, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+}
+function onPos(pos) {
+  const c = pos.coords; [me.x, me.y] = proj(c.latitude, c.longitude); me.acc = c.accuracy || 0; me.have = true; setLocBtn('on');
+  if (!me.first) return;
+  me.first = false;
+  const km = Math.hypot(me.x, me.y);   // map units are kilometres from the city centre
+  if (km > 120) toast(`You’re about ${Math.round(km).toLocaleString()} km from ${CFG.name || 'this city'}, so your blue dot is off the map.`, 5000);
+  else { select(null); flyToMe(); }
+}
+function onPosErr(err) {
+  if (me.have && err.code !== 1) return;   // a hiccup while following: keep the last fix
+  stopLocate();
+  toast(err.code === 1 ? 'Location is blocked. Allow it in your browser settings to see where you are.' : 'Couldn’t find your location. Try again.', 4500);
+}
+function flyToMe() { animateTo({ cx: me.x, cy: me.y, z: Math.max(view.z, HOME.z * 4) }, 800); }
+function stopLocate() {
+  if (me.watch != null) navigator.geolocation.clearWatch(me.watch);
+  Object.assign(me, { on: false, watch: null, have: false }); setLocBtn('off');
+}
+function setLocBtn(s) {
+  const b = $('#btnLocate'); b.classList.toggle('on', s === 'on'); b.classList.toggle('busy', s === 'busy');
+  b.title = s === 'on' ? 'Recentre on me (tap again to stop)' : 'Show my location (L)';
+}
+function drawMe(now) {
+  if (!me.have) return;
+  const [x, y] = w2s(me.x, me.y);
+  if (x < -400 || y < -400 || x > W + 400 || y > H + 400) return;
+  const ar = me.acc / 1000 * view.z;   // accuracy circle, metres → screen pixels
+  if (ar > 12) { ctx.fillStyle = 'rgba(66,133,244,.13)'; ctx.strokeStyle = 'rgba(66,133,244,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, ar, 0, 6.283); ctx.fill(); ctx.stroke(); }
+  if (!CALM) { const k = (now % 2000) / 2000; ctx.strokeStyle = `rgba(66,133,244,${0.55 * (1 - k)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 9 + k * 24, 0, 6.283); ctx.stroke(); }
+  ctx.save(); ctx.shadowColor = 'rgba(66,133,244,.9)'; ctx.shadowBlur = 14;
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.283); ctx.fill(); ctx.restore();
+  ctx.fillStyle = '#4285f4'; ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 6.283); ctx.fill();
+}
+
 /* ============ 10. Main loop ============ */
 function loop(now) {
   if (anim) {
@@ -734,6 +783,7 @@ addEventListener('keydown', e => {
   else if (k === 'r' || k === 'R') home();
   else if (k === 'h' || k === 'H') handOn ? stopHands() : startHands();
   else if (k === '?') $('#help').classList.toggle('show');
+  else if (k === 'l' || k === 'L') locate();
   else if (k === 'x' || k === 'X') $('#explore').classList.contains('show') ? closeOverlays() : openExplore();
   else if (k === ' ' && handOn) { e.preventDefault(); togglePause(); }
 });
@@ -753,6 +803,7 @@ $('#introHands').onclick = startHands;
 $('#introDemo').onclick = startDemo;
 $('#introMouse').onclick = closeOverlays;
 $('#btnExplore').onclick = () => openExplore();
+$('#btnLocate').onclick = locate;
 $('#introExplore').onclick = () => openExplore('lists');
 document.querySelectorAll('.closeX').forEach(b => b.onclick = closeOverlays);
 $('#demoStop').onclick = () => { stopDemo(); demoLater(); };

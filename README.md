@@ -22,6 +22,8 @@ No install, no build step, no server code. Hand tracking runs on your device wit
 | ✊ **Fist** (hold ⅓ s) | Closes the open place |
 | 🙌 **Two hands**, turned like a steering wheel | Rotates the map |
 
+Tap the **◎ locate button** (bottom right, or <kbd>L</kbd>) to see yourself as a blue dot, like in Google Maps. It follows you as you move; tap it again once you're centred to turn it off. Your location stays on your device.
+
 Mouse, touch and keyboard work too: drag, scroll or pinch to zoom, two-finger twist to rotate, click to open, <kbd>Esc</kbd> to close, <kbd>Q</kbd>/<kbd>E</kbd> to rotate, <kbd>/</kbd> to search.
 
 ## Make it your city
