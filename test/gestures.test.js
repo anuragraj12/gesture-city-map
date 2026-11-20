@@ -1,4 +1,4 @@
-// Run with:  node --test test/
+// Run with:  npm test
 // Drives the real gesture engine with synthetic hands at 30 fps and checks the commands it emits.
 const test = require('node:test');
 const assert = require('node:assert/strict');

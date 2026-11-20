@@ -1,6 +1,6 @@
 # Gesture City Map
 
-**A constellation map of any city that you fly with your hands, right in the browser.** Swipe, pinch, point and give a thumbs up. Swap in your own city by editing one file.
+**A constellation map of any city that you fly with your hands, right in the browser.** Swipe, pinch, point and give a thumbs up. Tick off the city's top places, earn badges and share your constellation. Swap in your own city by editing one file.
 
 ![Demo: a simulated hand swiping, pointing, opening a place, zooming and rotating the Bengaluru map](docs/demo.gif)
 
@@ -39,6 +39,26 @@ Mouse, touch and keyboard work too: drag, scroll or pinch to zoom, two-finger tw
 node tools/csv-to-city.mjs my-places.csv --name "Pune" > cities/pune.js
 ```
 
+## Explore: tick off the top places
+
+Press **🏆 Explore** (or <kbd>X</kbd>) for a checklist of the top places in each category.
+
+- **Tick what you've been to.** Each place is worth its rank × 10 points (30, 20 or 10).
+- **Check in on the spot** from the place card for **double points**. It uses your phone's location and needs you within about 400 m of the pin (1.5 km for approximate pins). Your location is only compared on your device and never sent anywhere.
+- **Earn badges.** Every category has a badge with bronze, silver and gold tiers, and there are city-wide ones like *First Star*, *Wanderer* and *City Legend*. Points also raise your level, from *Stargazer* to *City Legend*.
+- **Share it.** *Share* draws a picture of your own constellation (the places you've visited, joined up) or of a badge. On phones it opens the share sheet for Instagram, WhatsApp and the rest; there are also LinkedIn, Facebook, X and WhatsApp links, a download button and copy-link.
+
+Progress is saved in your browser (`localStorage`), per city. Turn it on for your city with an `explore` block, and give categories badge names:
+
+```js
+explore: { top: 15, skip: ["rail", "air"] },   // top N per category; skipped categories stay on the map only
+categories: {
+  pubs: { label: "Pubs & Breweries", color: "#ffb020", icon: "🍺", badge: "Brewery Hopper" },
+},
+```
+
+Without an `explore` block every category gets a top-15 list and a badge named "<label> Explorer".
+
 <details>
 <summary><b>Every config field</b></summary>
 
@@ -51,6 +71,8 @@ node tools/csv-to-city.mjs my-places.csv --name "Pune" > cities/pune.js
 | `center` | | `[lat, lng]` the map is measured from. Defaults to the middle of your places |
 | `homeZoom` | | `>1` starts closer, `<1` further out |
 | `theme` | | `{ accent, accent2 }` UI colours |
+| `explore` | | `{ top, skip, radius, approxRadius }` for Explore mode: list length per category, categories to leave out, and check-in distance in metres |
+| `categories[k].badge` | | Badge name for that category in Explore mode |
 | `lines` | | Transit lines (`kind: "transit"`, `stops: [[name, lat, lng], …]`), roads (`kind: "road"`) and rivers (`kind: "water"`, `points: [[lat, lng], …]`) |
 
 `rank` controls labels: 3 is always labelled, 2 when you zoom in a little, 1 when you zoom in a lot. A mistake in the config, like an unknown category, shows a warning and skips that place instead of breaking the map.
@@ -97,11 +119,12 @@ The tests drive the real engine with synthetic hands (`src/synth.js`) at 30 fps.
 index.html            page shell; picks the city file
 cities/               one file per city (bengaluru.js, london.js, _template.js)
 src/gestures.js       gesture engine: landmarks in, map commands out
+src/explore.js        Explore mode: top-place lists, points, levels, badges
 src/app.js            map drawing, UI, camera, mouse, touch, keyboard, demo
 src/synth.js          synthetic hand generator for tests and the demo
 src/style.css         styles
 tools/csv-to-city.mjs CSV → city config converter
-test/                 engine tests (node --test)
+test/                 engine and Explore tests (node --test)
 ```
 
 ## Privacy

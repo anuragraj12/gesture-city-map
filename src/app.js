@@ -208,18 +208,18 @@ async function startHands() {
     vid.srcObject = camStream; await vid.play();
     engine.setCameraAspect(vid.videoWidth / vid.videoHeight);
     handOn = true; paused = false; engine.reset();
-    $('#btnHands').textContent = '■ Hands off'; $('#btnHands').classList.add('on'); $('#btnPause').hidden = false; $('#camOff').style.display = 'none';
+    $('#btnHands').innerHTML = '■<span class="bl"> Hands off</span>'; $('#btnHands').classList.add('on'); $('#btnPause').hidden = false; $('#camOff').style.display = 'none';
     toast('Hand control on. Show one hand to begin.');
   } catch (err) {
     console.error(err);
-    $('#btnHands').textContent = '✋ Hands';
+    $('#btnHands').innerHTML = '✋<span class="bl"> Hands</span>';
     toast(err && err.name === 'NotAllowedError' ? 'Camera blocked. Allow it in the address bar, or try ▶ Demo.' : 'Hand tracking could not start here. Try Chrome or Edge, or ▶ Demo.', 5200);
   }
 }
 function stopHands() {
   handOn = false; camStream?.getTracks().forEach(t => t.stop()); camStream = null; vid.srcObject = null;
   engine.reset(); onHands([], performance.now(), 'camera');
-  $('#btnHands').textContent = '✋ Hands'; $('#btnHands').classList.remove('on'); $('#btnPause').hidden = true; $('#camOff').style.display = '';
+  $('#btnHands').innerHTML = '✋<span class="bl"> Hands</span>'; $('#btnHands').classList.remove('on'); $('#btnPause').hidden = true; $('#camOff').style.display = '';
   showPose('none'); $('#poseName').textContent = 'Hand control off'; $('#poseHint').textContent = 'press ✋ Hands or ▶ Demo';
 }
 function pollCamera() {
@@ -347,9 +347,11 @@ function select(p) {
     <h3>${esc(p.name)}</h3><div class="area">${esc(p.area || '')}</div>
     ${p.note ? `<p>${esc(p.note)}</p>` : ''}
     <div class="acts"><a href="https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}" target="_blank" rel="noopener">Open in Google Maps ↗</a></div>
+    ${cardExplore(p)}
     ${p.approx ? '<div class="approx">Approximate pin: area-level location.</div>' : ''}
     <div class="hint">✊ fist or Esc to close</div>`;
   card.querySelector('.x').onclick = () => select(null);
+  card.querySelectorAll('[data-x]').forEach(b => b.onclick = () => b.dataset.x === 'gps' ? checkIn(p) : setVisit(p, b.dataset.x));
   card.classList.add('show');
 }
 
@@ -425,6 +427,8 @@ function draw(now) {
     const r = (4 + p.rank * 3.2) * clamp(Math.sqrt(zr), 0.75, 1.8) * tw * (hot ? 1.5 : 1);
     ctx.drawImage(sprite(CATS[p.cat].color), x - r * 2, y - r * 2, r * 4, r * 4);
     if (hot) { ctx.strokeStyle = CATS[p.cat].color; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(x, y, r * 1.4 + (CALM ? 0 : 3 * Math.sin(t * 4)), 0, 6.283); ctx.stroke(); }
+    const vis = XP && !EMBED && XP.visit(p);
+    if (vis) { ctx.strokeStyle = vis.gps ? '#ffd34d' : 'rgba(74,222,128,.85)'; ctx.lineWidth = vis.gps ? 2 : 1.4; ctx.setLineDash(vis.gps ? [] : [3, 3]); ctx.beginPath(); ctx.arc(x, y, Math.max(7, r * 0.95), 0, 6.283); ctx.stroke(); ctx.setLineDash([]); }
     const show = hot || p.rank === 3 || (p.rank === 2 && zr > 1.7) || zr > 3.8;
     if (show) labels.push([hot ? 9 : p.rank, p, x, y, r]);
   }
@@ -441,6 +445,14 @@ function draw(now) {
 }
 function drawFx(now) {
   fc.clearRect(0, 0, W, H);
+  for (let i = bursts.length - 1; i >= 0; i--) {   // little star burst when a place is ticked off
+    const b = bursts[i], a = (now - b.t) / 900;
+    if (a >= 1) { bursts.splice(i, 1); continue; }
+    const [bx, by] = w2s(b.p.x, b.p.y), e = 1 - (1 - a) ** 3;
+    fc.globalAlpha = 1 - a; fc.fillStyle = b.col;
+    for (let k = 0; k < 16; k++) { const an = k / 16 * 6.283 + b.p.ph, d = 10 + e * 46 * (k % 2 ? 0.7 : 1); fc.beginPath(); fc.arc(bx + Math.cos(an) * d, by + Math.sin(an) * d, 2.4 * (1 - a) + 0.6, 0, 6.283); fc.fill(); }
+    fc.strokeStyle = b.col; fc.lineWidth = 2; fc.beginPath(); fc.arc(bx, by, 8 + e * 30, 0, 6.283); fc.stroke(); fc.globalAlpha = 1;
+  }
   // swipe flash
   if (flash.swipe && now - flash.t < 600) {
     const a = 1 - (now - flash.t) / 600, d = flash.swipe, ang = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 }[d];
@@ -470,6 +482,198 @@ function drawFx(now) {
     fc.strokeStyle = hexA(CATS[S.hover.cat].color, 0.7); fc.lineWidth = 1; fc.setLineDash([3, 4]);
     fc.beginPath(); fc.moveTo(P.x, P.y); fc.lineTo(S.hover.sx, S.hover.sy); fc.stroke(); fc.setLineDash([]);
   }
+}
+
+
+/* ============ 9b. Explore: top places, points, badges, sharing ============ */
+const CITY_ID = (() => { const id = new URLSearchParams(location.search).get('city') || document.documentElement.dataset.city || 'bengaluru'; return /^[a-z0-9_-]+$/i.test(id) ? id : 'bengaluru'; })();
+const XKEY = 'gcm:explore:' + CITY_ID;
+const xstore = {
+  get() { try { return JSON.parse(localStorage.getItem(XKEY) || '{}'); } catch { return {}; } },
+  set(v) { try { localStorage.setItem(XKEY, JSON.stringify(v)); } catch { /* private mode: progress lasts this visit only */ } },
+};
+const XP = window.Explore ? Explore.create({ places, categories: CATS, options: CFG.explore || {}, visits: xstore.get() }) : null;
+const xcats = XP ? Object.keys(XP.lists) : [];
+const byKey = new Map(places.map(p => [Explore.keyOf(p), p]));
+const bursts = [];
+const TIER = { bronze: '#e0995e', silver: '#cfd8ea', gold: '#ffd34d' };
+let xTab = 'lists', xCat = xcats[0], centerChip = true;
+
+function cardExplore(p) {
+  const i = XP && !EMBED && XP.info(p); if (!i) return '';
+  const v = XP.visit(p);
+  return `<div class="xcard"><div class="xrank">🏆 #${i.pos} of the top ${i.of} ${esc(CATS[i.cat].label)} · <b>${i.points} pts</b>${v ? '' : ', 2× if you check in here'}</div><div class="xbtns">${v
+    ? `<span class="xdone">${v.gps ? '📍 Checked in' : '✓ Visited'} · +${XP.pointsFor(p)}</span>${v.gps ? '' : '<button data-x="gps" data-gx>📍 Check in for 2×</button>'}<button data-x="undo" data-gx class="ghost">Undo</button>`
+    : `<button data-x="tick" data-gx class="pri">✓ I've been here</button><button data-x="gps" data-gx>📍 I'm here now (2×)</button>`}</div></div>`;
+}
+function setVisit(p, how) {   // how: 'tick' | 'gps' | 'undo'
+  if (!XP) return;
+  const before = XP.summary();
+  if (how === 'undo') XP.unmark(p); else XP.mark(p, { gps: how === 'gps' });
+  xstore.set(XP.visits());
+  const after = XP.summary(), gained = after.points - before.points;
+  updateXpButton(after);
+  if (gained > 0) { bursts.push({ p, t: performance.now(), col: how === 'gps' ? '#ffd34d' : CATS[p.cat].color }); toast(`+${gained} points · ${p.name}`); }
+  const fresh = XP.unlocked(before, after); if (fresh.length) setTimeout(() => showUnlock(fresh), 500);
+  if (S.sel === p) select(p);
+  if ($('#explore').classList.contains('show')) renderExplore();
+}
+const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+function checkIn(p) {
+  if (!navigator.geolocation) { toast('Location isn’t available in this browser. Tick it as visited instead.', 4000); return; }
+  toast('Finding where you are…', 10000);
+  navigator.geolocation.getCurrentPosition(pos => {
+    const r = XP.canCheckIn(p, { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+    if (r.ok) setVisit(p, 'gps');
+    else toast(`You’re ${fmtDist(r.distance)} away. Get within ${fmtDist(r.limit)} to check in, or tick it as visited.`, 5000);
+  }, err => toast(err.code === 1 ? 'Location is blocked. Allow it in your browser to check in.' : 'Couldn’t find your location. Try again in the open.', 4500),
+  { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+}
+function updateXpButton(s = XP && XP.summary()) {
+  if (!XP) { $('#btnExplore').hidden = true; return; }
+  $('#btnExplore').innerHTML = s.points ? `🏆 <b class="xbp">${s.points}</b>` : '🏆<span class="bl"> Explore</span>';
+}
+function badgeHtml(b, big) {
+  const col = b.tier ? TIER[b.tier] : 'var(--line)';
+  return `<div class="bdg${b.tier ? '' : ' locked'}${big ? ' big' : ''}" style="--tc:${col}"><span>${esc(b.icon)}</span></div>`;
+}
+function openExplore(tab) { if (!XP) return; if (tab) xTab = tab; closeOverlays(); $('#explore').classList.add('show'); $('#explore .panel').scrollTop = 0; centerChip = true; renderExplore(); }
+function renderExplore() {
+  const s = XP.summary(), prog = s.nextAt ? (s.points - s.levelMin) / (s.nextAt - s.levelMin) : 1;
+  let h = `<div class="xhead"><div class="xlv"><small>Explore ${esc(CFG.name || 'the city')}</small><h2>${esc(s.level)}</h2>
+    <div class="xbar"><i style="width:${(prog * 100).toFixed(1)}%"></i></div>
+    <small>${s.nextAt ? `${s.nextAt - s.points} points to ${esc(s.nextLevel)}` : 'Top level reached'}</small></div>
+    <div class="xpts"><b>${s.points}</b><span>points</span></div></div>
+    <div class="xstats"><span><b>${s.visited}</b> / ${s.total} places</span><span><b>${s.earned}</b> / ${s.earnable} badges</span><span><b>${s.gps}</b> check-ins</span></div>
+    <div class="xtabs"><button data-tab="lists" data-gx class="${xTab === 'lists' ? 'on' : ''}">Top places</button><button data-tab="badges" data-gx class="${xTab === 'badges' ? 'on' : ''}">Badges</button><button id="xpShare" data-gx class="pri">↗ Share</button></div>`;
+  if (xTab === 'lists') {
+    h += `<div class="xchips">${xcats.map(k => { const L = XP.lists[k], d = L.filter(p => XP.visit(p)).length;
+      return `<button data-cat="${esc(k)}" data-gx class="${k === xCat ? 'on' : ''}" style="--cc:${CATS[k].color}">${esc(CATS[k].icon)} ${esc(CATS[k].label)} <small>${d}/${L.length}</small></button>`; }).join('')}</div>
+      <p class="xtip">Tick what you’ve been to. Tap a name to fly there. Check in on the spot from the place card for double points.</p>
+      <ol class="xlist">${XP.lists[xCat].map((p, i) => { const v = XP.visit(p), k = Explore.keyOf(p);
+      return `<li class="${v ? 'done' : ''}"><button class="tick${v && v.gps ? ' gps' : ''}" data-tick="${esc(k)}" data-gx aria-label="${v ? 'Untick' : 'Tick'} ${esc(p.name)}">${v ? (v.gps ? '📍' : '✓') : ''}</button>
+        <span class="xn" data-go="${esc(k)}" data-gx><b>${i + 1}. ${esc(p.name)}</b><small>${esc(p.area || '')}</small></span><span class="xpp">${v ? '+' + XP.pointsFor(p) : (p.rank || 1) * 10}</span></li>`; }).join('')}</ol>`;
+  } else {
+    h += `<div class="xbadges">${s.badges.map(b => `<div class="xb${b.tier ? '' : ' locked'}">${badgeHtml(b)}<div class="xbt"><b>${esc(b.name)}</b>
+      <small>${b.tier ? `<span class="tier" style="color:${TIER[b.tier]}">${b.tier}</span> · ` : ''}${esc(b.desc)}</small>
+      <div class="xbar sm"><i style="width:${(Math.min(1, b.have / b.goal) * 100).toFixed(1)}%"></i></div><small>${b.tierIndex + 1 >= b.tiers ? 'Complete' : `${b.have} / ${b.goal}${b.tier ? ' for the next tier' : ''}`}</small></div>
+      ${b.tier ? `<button data-sb="${esc(b.id)}" data-gx class="ghost" title="Share this badge">↗</button>` : ''}</div>`).join('')}</div>`;
+  }
+  const el = $('#xpBody'), panel = el.parentElement, keep = panel.scrollTop, chipX = el.querySelector('.xchips')?.scrollLeft || 0;
+  el.innerHTML = h; panel.scrollTop = keep;
+  const chips = el.querySelector('.xchips'), on = chips?.querySelector('.on');
+  if (chips) chips.scrollLeft = centerChip && on ? on.offsetLeft - chips.clientWidth / 2 + on.offsetWidth / 2 : chipX;
+  centerChip = false;
+  el.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { xTab = b.dataset.tab; centerChip = true; renderExplore(); });
+  el.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { xCat = b.dataset.cat; renderExplore(); });
+  el.querySelectorAll('[data-tick]').forEach(b => b.onclick = () => { const p = byKey.get(b.dataset.tick); setVisit(p, XP.visit(p) ? 'undo' : 'tick'); });
+  el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { const p = byKey.get(b.dataset.go); closeOverlays(); S.hidden.delete(p.cat); buildLegendState(); focusPlace(p); select(p); });
+  el.querySelectorAll('[data-sb]').forEach(b => b.onclick = () => openShare(s.badges.find(x => x.id === b.dataset.sb)));
+  $('#xpShare').onclick = () => openShare();
+}
+let unlockT = 0;
+function showUnlock(list) {
+  if (EMBED) return;
+  const b = list[list.length - 1], more = list.length - 1, el = $('#unlock');
+  el.innerHTML = `${badgeHtml(b, true)}<div class="ut"><small>Badge unlocked${b.tiers > 1 ? ` · <span style="color:${TIER[b.tier]}">${b.tier}</span>` : ''}</small><b>${esc(b.name)}</b><span>${esc(b.desc)}${more ? ` · and ${more} more` : ''}</span>
+    <div class="ub"><button data-gx class="pri" id="uShare">↗ Share</button><button data-gx id="uOk">Nice</button></div></div>`;
+  el.classList.add('show'); clearTimeout(unlockT); unlockT = setTimeout(() => el.classList.remove('show'), 8000);
+  $('#uShare').onclick = () => { el.classList.remove('show'); openShare(b); };
+  $('#uOk').onclick = () => el.classList.remove('show');
+}
+
+/* --- sharing: a picture of your constellation + links to the usual apps --- */
+function shareUrl() {
+  const u = new URL(location.href); u.search = ''; u.hash = ''; u.pathname = u.pathname.replace(/index\.html$/, '');
+  if (CITY_ID !== (document.documentElement.dataset.city || 'bengaluru')) u.searchParams.set('city', CITY_ID);
+  return u.toString();
+}
+function drawShareCard(badge) {
+  const s = XP.summary(), Wc = 1080, Hc = 1350, c = document.createElement('canvas'); c.width = Wc; c.height = Hc;
+  const g = c.getContext('2d'), F = 'Space Grotesk, system-ui, sans-serif';
+  const gr = g.createLinearGradient(0, 0, 0, Hc); gr.addColorStop(0, '#0b1030'); gr.addColorStop(0.6, '#050820'); gr.addColorStop(1, '#010208');
+  g.fillStyle = gr; g.fillRect(0, 0, Wc, Hc);
+  [['#3b1d78', 0.15, 0.2], ['#0b4a6f', 0.85, 0.35], ['#5b1650', 0.6, 0.85]].forEach(([col, x, y]) => {
+    const n = g.createRadialGradient(Wc * x, Hc * y, 0, Wc * x, Hc * y, 620); n.addColorStop(0, hexA(col, 0.45)); n.addColorStop(1, hexA(col, 0)); g.fillStyle = n; g.fillRect(0, 0, Wc, Hc);
+  });
+  let seed = 7; const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+  for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(255,255,255,${rnd() * 0.5 + 0.1})`; g.fillRect(rnd() * Wc, rnd() * Hc, 1.6, 1.6); }
+  // the city, with the places you've visited lit up and joined
+  const box = { x0: 90, y0: 330, x1: 990, y1: 980 };
+  const seen = places.filter(p => XP.visit(p));
+  // frame your own places (with some room around them); before you've been anywhere, frame the city centre
+  const fit = seen.length >= 2 ? seen : places, lo = seen.length >= 2 ? 0 : 0.15;
+  const xs = fit.map(p => p.x), ys = fit.map(p => p.y);
+  let wx0 = pct(xs, lo), wx1 = pct(xs, 1 - lo), wy0 = pct(ys, lo), wy1 = pct(ys, 1 - lo);
+  const span = Math.max(wx1 - wx0, wy1 - wy0, 6) * 1.35, mx = (wx0 + wx1) / 2, my = (wy0 + wy1) / 2;
+  wx0 = mx - span / 2; wx1 = mx + span / 2; wy0 = my - span / 2; wy1 = my + span / 2;
+  const k = Math.min((box.x1 - box.x0) / (wx1 - wx0), (box.y1 - box.y0) / (wy1 - wy0));
+  const ox = (box.x0 + box.x1) / 2 - (wx0 + wx1) / 2 * k, oy = (box.y0 + box.y1) / 2 - (wy0 + wy1) / 2 * k;
+  const P = p => [ox + p.x * k, oy + p.y * k];
+  const dim = badge ? 0.45 : 1;
+  g.globalAlpha = dim;
+  for (const p of places) { const [x, y] = P(p); if (x < 40 || x > Wc - 40 || y < 280 || y > 1040) continue; g.fillStyle = hexA(CATS[p.cat].color, 0.28); g.beginPath(); g.arc(x, y, 3, 0, 6.283); g.fill(); }
+  for (const kk of catKeys) {
+    g.strokeStyle = hexA(CATS[kk].color, 0.55); g.lineWidth = 2.5; g.beginPath();
+    for (const [a, b] of mst(seen.filter(p => p.cat === kk))) { const [x1, y1] = P(a), [x2, y2] = P(b); g.moveTo(x1, y1); g.lineTo(x2, y2); }
+    g.stroke();
+  }
+  for (const p of seen) { const [x, y] = P(p), r = 13 + (p.rank || 1) * 4; g.drawImage(sprite(CATS[p.cat].color), x - r * 2, y - r * 2, r * 4, r * 4); }
+  g.globalAlpha = 1;
+  g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  const city = (CFG.name || 'the city');
+  g.fillStyle = '#7cf3ff'; g.font = `600 30px ${F}`; g.fillText((badge ? 'BADGE UNLOCKED' : `MY ${city.toUpperCase()} CONSTELLATION`).split('').join(String.fromCharCode(8202)), Wc / 2, 120);
+  if (badge) {
+    const col = TIER[badge.tier] || '#ffd34d';
+    const halo = g.createRadialGradient(Wc / 2, 640, 0, Wc / 2, 640, 300); halo.addColorStop(0, hexA(col.length === 7 ? col : '#ffd34d', 0.35)); halo.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = halo; g.fillRect(0, 300, Wc, 700);
+    g.fillStyle = 'rgba(8,12,32,.85)'; g.beginPath(); g.arc(Wc / 2, 640, 190, 0, 6.283); g.fill();
+    g.strokeStyle = col; g.lineWidth = 14; g.stroke();
+    g.font = `170px ${F}`; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText(badge.icon, Wc / 2, 650); g.textBaseline = 'alphabetic';
+    g.fillStyle = '#fff'; g.font = `700 76px ${F}`; g.fillText(badge.name, Wc / 2, 245, Wc - 120);
+    g.fillStyle = col; g.font = `600 34px ${F}`; g.fillText(badge.tiers > 1 ? `${badge.tier.toUpperCase()} TIER` : 'EARNED', Wc / 2, 900);
+    g.fillStyle = '#c3cbea'; g.font = `400 32px ${F}`; g.fillText(badge.desc + ` in ${city}`, Wc / 2, 955, Wc - 120);
+  } else {
+    g.fillStyle = '#fff'; g.font = `700 92px ${F}`; g.fillText(`${s.visited} place${s.visited === 1 ? '' : 's'} explored`, Wc / 2, 225, Wc - 100);
+    g.fillStyle = '#c3cbea'; g.font = `500 36px ${F}`; g.fillText(`${s.level} · ${s.points} points · ${s.visited} of the top ${s.total}`, Wc / 2, 285, Wc - 100);
+  }
+  // earned badges strip
+  const got = s.badges.filter(b => b.tier).slice(-7);
+  if (got.length) {
+    const gap = 118, x0 = Wc / 2 - (got.length - 1) * gap / 2;
+    got.forEach((b, i) => { const x = x0 + i * gap; g.fillStyle = 'rgba(8,12,32,.8)'; g.beginPath(); g.arc(x, 1110, 46, 0, 6.283); g.fill(); g.strokeStyle = TIER[b.tier]; g.lineWidth = 5; g.stroke(); g.font = `46px ${F}`; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText(b.icon, x, 1114); g.textBaseline = 'alphabetic'; });
+    g.fillStyle = '#8a93b8'; g.font = `500 26px ${F}`; g.fillText(`${s.earned} badge${s.earned === 1 ? '' : 's'} earned`, Wc / 2, 1192);
+  }
+  g.fillStyle = 'rgba(140,160,255,.25)'; g.fillRect(90, 1232, Wc - 180, 2);
+  g.fillStyle = '#e8ecff'; g.font = `600 32px ${F}`; g.fillText('Explore it with your hands  →  ' + shareUrl().replace(/^https?:\/\//, '').replace(/\/$/, ''), Wc / 2, 1290, Wc - 120);
+  return c;
+}
+function openShare(badge) {
+  if (!XP) return;
+  const s = XP.summary(), url = shareUrl(), city = CFG.name || 'the city';
+  const text = badge ? `I just earned the ${badge.name} badge${badge.tiers > 1 ? ` (${badge.tier})` : ''} exploring ${city} on a map I fly with my hands ✋✨`
+    : s.visited ? `I've explored ${s.visited} of the top ${s.total} places in ${city}: ${s.points} points, level ${s.level}. Here's my constellation ✨`
+    : `Fly ${city} with your hands, tick off the top places and earn badges ✨`;
+  const canvas = drawShareCard(badge), dataUrl = canvas.toDataURL('image/png');
+  const bin = atob(dataUrl.split(',')[1]), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const fname = `${CITY_ID}-${badge ? 'badge' : 'constellation'}.png`, file = new File([u8], fname, { type: 'image/png' });
+  const canFile = !!(navigator.canShare && navigator.canShare({ files: [file] })), E = encodeURIComponent;
+  $('#shareBody').innerHTML = `<h2>Share your <span>${badge ? 'badge' : 'constellation'}</span></h2>
+    <img class="simg" src="${dataUrl}" alt="Share image">
+    <div class="sbtns">
+      ${canFile ? '<button id="sNative" data-gx class="pri wide">📤 Share image to Instagram, WhatsApp…</button>' : navigator.share ? '<button id="sNative" data-gx class="pri wide">📤 Share…</button>' : ''}
+      <a class="sbtn" data-gx target="_blank" rel="noopener" href="https://www.linkedin.com/sharing/share-offsite/?url=${E(url)}">in&nbsp; LinkedIn</a>
+      <a class="sbtn" data-gx target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u=${E(url)}">f&nbsp; Facebook</a>
+      <a class="sbtn" data-gx target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?text=${E(text)}&url=${E(url)}">𝕏&nbsp; Post</a>
+      <a class="sbtn" data-gx target="_blank" rel="noopener" href="https://wa.me/?text=${E(text + ' ' + url)}">💬&nbsp; WhatsApp</a>
+      <a class="sbtn" data-gx download="${fname}" href="${dataUrl}">⬇&nbsp; Save image</a>
+      <button id="sCopy" data-gx class="sbtn">🔗&nbsp; Copy text + link</button>
+    </div>
+    <p class="fine">${canFile ? 'On Instagram, pick Stories or Feed from the share sheet.' : 'Instagram has no web share link: save the image, then post it as a Story or in your feed.'} LinkedIn and Facebook share the link; attach the saved image to your post to show it off.</p>`;
+  const nat = $('#sNative');
+  if (nat) nat.onclick = () => navigator.share(canFile ? { files: [file], title: document.title, text: text + ' ' + url } : { title: document.title, text, url }).catch(() => {});
+  $('#sCopy').onclick = () => navigator.clipboard?.writeText(text + ' ' + url).then(() => toast('Copied. Paste it anywhere.'), () => toast('Couldn’t copy here.'));
+  closeOverlays(); $('#share').classList.add('show');
 }
 
 /* ============ 10. Main loop ============ */
@@ -530,6 +734,7 @@ addEventListener('keydown', e => {
   else if (k === 'r' || k === 'R') home();
   else if (k === 'h' || k === 'H') handOn ? stopHands() : startHands();
   else if (k === '?') $('#help').classList.toggle('show');
+  else if (k === 'x' || k === 'X') $('#explore').classList.contains('show') ? closeOverlays() : openExplore();
   else if (k === ' ' && handOn) { e.preventDefault(); togglePause(); }
 });
 
@@ -547,17 +752,20 @@ $('#btnHelp').onclick = () => $('#help').classList.add('show');
 $('#introHands').onclick = startHands;
 $('#introDemo').onclick = startDemo;
 $('#introMouse').onclick = closeOverlays;
+$('#btnExplore').onclick = () => openExplore();
+$('#introExplore').onclick = () => openExplore('lists');
+document.querySelectorAll('.closeX').forEach(b => b.onclick = closeOverlays);
 $('#demoStop').onclick = () => { stopDemo(); demoLater(); };
 document.querySelectorAll('.closeHelp').forEach(b => b.onclick = closeOverlays);
 document.querySelectorAll('.ov').forEach(o => o.addEventListener('click', e => { if (e.target === o) closeOverlays(); }));
 
 /* ============ boot ============ */
 addEventListener('resize', resize);
-resize(); buildLegend(); drawCam([], 'none');
+resize(); buildLegend(); drawCam([], 'none'); updateXpButton();
 if (problems.length) toast(`City config: ${problems.length} problem${problems.length > 1 ? 's' : ''}. See the browser console.`, 5000);
 const qs = new URLSearchParams(location.search);
 if (EMBED) { document.body.classList.add('embed'); closeOverlays(); startDemo(); }
 else if (qs.has('demo')) startDemo();
 requestAnimationFrame(loop);
-window.GestureCityMap = { view, places, engine, onHands, startDemo, stopDemo, select, home, w2s };
+window.GestureCityMap = { view, places, engine, onHands, startDemo, stopDemo, select, home, w2s, explore: XP, openExplore, openShare, setVisit };
 })();

@@ -6,7 +6,7 @@
   "author": "Anurag Raj",
   "private": true,
   "scripts": {
-    "test": "node --test test/gestures.test.js",
+    "test": "node --test test/*.test.js",
     "start": "python3 -m http.server 8000"
   },
   "keywords": ["hand-tracking", "gestures", "mediapipe", "map", "city", "computer-vision", "template"]
