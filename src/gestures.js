@@ -4,25 +4,33 @@
     commands. It has no DOM code, so it runs in the browser and in Node
     (see test/gestures.test.js).
 
-    Poses (one hand)                 Command
-      open palm, moved fast          swipe left / right / up / down
-      thumb + index, others folded   pinch out = zoom in, pinch in = zoom out
-      index finger only              move the pointer
-      thumbs up (hold)               click the place under the pointer
-      fist (hold)                    close the open place
+    Poses (one hand)                         Command
+      four fingers straight and together     drag: the map follows your hand (pan)
+      index + middle straight (✌️)           move up = zoom in, move down = zoom out
+      index finger only                      move the pointer
+      ...then fold the index and lift it     click the place under the pointer
+      thumbs up (hold)                       click (still works)
+      fist (hold)                            close the open place
+      open palm, fingers spread              rest: nothing happens
     Two hands
-      both hands in view             rotate the map (turn the line between them)
+      both hands in view                     rotate the map (turn the line between them)
+
+    Trained gestures (src/trainer.js) plug in through engine.setClassifier().
+    A confident custom prediction replaces the built-in pose for that frame,
+    so a trained gesture can drive any built-in action or a one-off command.
 
     Robustness tricks used below
       - Finger shape uses MediaPipe *world* landmarks (metric, camera-facing),
         so poses read the same whether your hand is near, far or tilted.
+      - "Fingers together" is measured as the angle between neighbouring
+        fingers in the plane of the palm, so bending a finger doesn't count.
       - A new pose must persist for a few frames (hysteresis) before it counts.
-      - Click and close fire once per pose, after a short hold, with a cooldown.
-      - The pointer is smoothed with a One Euro filter and rewinds to where it
-        was *before* your hand started changing shape, so clicking can't
-        knock it off target.
-      - Swipes need speed, distance and a clear direction; the return stroke
-        of a swipe is ignored.
+      - Pan and zoom only use frames where the hand clearly holds the pose, and
+        they re-anchor whenever it doesn't, so changing shape never jerks the map.
+      - The click freezes the pointer the moment the index starts to fold, and
+        rewinds it a little, so folding can't drag it off target. A fold held too
+        long is not a click: it becomes a fist.
+      - Hold gestures fire once per pose, after a short hold, with a cooldown.
       - Two-hand mode suppresses one-hand gestures, with a grace period after.
 */
 (function (root, factory) {
@@ -35,29 +43,29 @@
   const DEFAULTS = {
     extOn: 1.55,            // finger counts as straight above this tip/knuckle distance ratio
     curlOn: 1.35,           // ...and as folded below this one
-    thumbOut: 0.72,         // thumb tip distance from index knuckle (palm sizes) for "thumb out"
-    pinchClose: 0.32,       // thumb–index tip gap (palm sizes) that counts as pinched together
-    pinchTight: 0.22,       // a very tight pinch still counts even if the index is bent a lot
-    thumbFree: 0.68,        // thumb tip distance from the folded middle finger: pinch vs point
+    flatSpread: 20,         // degrees: four straight fingers fanned less than this (in total) are "together"
     thumbUpTop: -0.10,      // thumbs up: thumb tip at least about as high as every other point
     thumbUpRise: 0.45,      // ...and well above its own base knuckle
     poseFrames: 3,          // frames a new pose must persist before it takes over
-    holdMs: 320,            // hold a thumbs up or fist this long to fire
-    actionCooldownMs: 900,  // minimum gap between two clicks (or two closes)
-    pointerRewindMs: 130,   // when leaving the pointer pose, rewind the pointer this far
-    swipeWindowMs: 320,
-    swipeDist: 0.15,        // fraction of the camera frame the palm must travel
-    swipeAxisRatio: 1.7,    // main direction must dominate the other by this much
-    swipeOpenShare: 0.6,    // share of recent frames that must read as an open palm
-    swipeCooldownMs: 650,
-    swipeReturnMs: 1000,    // within this window a swipe back the other way...
-    swipeReturnDist: 0.30,  // ...must travel this far (ignores the return stroke)
-    zoomGain: 1.0,          // one full pinch spread is roughly an 8x zoom
-    zoomSettleMs: 150,      // a pinch must be held this long before it can zoom (hand-shape changes pass through pinch)
-    pinchTrailMs: 300,      // ...and this long before the pointer trusts it for clicks
-    zoomLatch: 0.09,        // thumb–index gap must change ~9% before zooming starts
-    zoomDeadband: 0.012,
-    zoomSmoothing: 0.5,
+    holdMs: 320,            // hold a thumbs up, fist or trained command this long to fire
+    actionCooldownMs: 900,  // minimum gap between two firings of the same hold gesture
+    pointerRewindMs: 130,   // when the pointer stops (fold or shape change), rewind it this far
+    tapDepth: 1.30,         // click: the index must fold below this ratio...
+    tapUp: 1.62,            // ...and straighten above this one again...
+    tapMinMs: 50,           // ...within this window
+    tapMaxMs: 450,          // (held longer than this, a fold is a fist, not a click)
+    clickCooldownMs: 450,
+    tapThumbFrames: 6,      // a fold that settles into a thumbs up for this many frames is a thumbs up
+    panGain: 1.6,           // screen pixels the map moves per pixel of hand movement
+    panSettleMs: 120,       // the four-finger pose must be held this long before it pans
+    panDeadband: 1.0,       // px
+    panStart: 9,            // px of hand movement before a still hand starts dragging
+    panStill: 1.2,          // px per frame below which the hand counts as still...
+    panStillMs: 350,        // ...and after this long still, the dead zone comes back
+    zoomGain: 2.2,          // moving one screen height zooms by e^2.2 ≈ 9x
+    zoomSettleMs: 150,
+    zoomLatch: 0.025,       // fraction of screen height to move before zooming starts
+    zoomDeadband: 0.004,
     rotateDeadband: 0.006,  // radians
     rotateSmoothing: 0.5,
     twoHandFrames: 3,
@@ -73,24 +81,36 @@
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+  const sub = (a, b) => [a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0)];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const unit = v => { const n = Math.hypot(v[0], v[1], v[2]) || 1e-9; return [v[0] / n, v[1] / n, v[2] / n]; };
   const wrap = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+
+  /** Total angle (degrees) between neighbouring fingers, measured in the plane of the palm. */
+  function spreadOf(W) {
+    const n = unit(cross(sub(W[5], W[0]), sub(W[17], W[0])));
+    const dirs = TIP.map((t, i) => { const v = sub(W[t], W[KNUCKLE[i]]), k = dot(v, n); return unit([v[0] - n[0] * k, v[1] - n[1] * k, v[2] - n[2] * k]); });
+    let s = 0;
+    for (let i = 0; i < 3; i++) s += Math.acos(clamp(dot(dirs[i], dirs[i + 1]), -1, 1));
+    return s * 180 / Math.PI;
+  }
 
   /* ---------- measurements from one hand ---------- */
   function features(hand) {
     const L = hand.lm, W = hand.world || hand.lm;
-    const scale = d3(W[0], W[9]) || 1e-6;
     const ext = TIP.map((t, i) => d3(W[0], W[t]) / (d3(W[0], W[KNUCKLE[i]]) || 1e-6));
-    const thumbOut = d3(W[4], W[5]) / scale;
-    const pinch = d3(W[4], W[8]) / scale;
-    const thumbFree = d3(W[4], W[10]) / scale;
     const iscale = Math.hypot(L[0].x - L[9].x, L[0].y - L[9].y) || 1e-6;
     let minOther = Infinity;
     for (let i = 0; i < 21; i++) if (i < 1 || i > 4) minOther = Math.min(minOther, L[i].y);
     const thumbTop = (minOther - L[4].y) / iscale;
     const thumbRise = (L[2].y - L[4].y) / iscale;
-    let px = 0, py = 0;
-    for (const i of PALM) { px += L[i].x; py += L[i].y; }
-    return { ext, thumbOut, thumbFree, pinch, thumbTop, thumbRise, iscale, palm: { x: 1 - px / 5, y: py / 5 }, tip: { x: 1 - L[8].x, y: L[8].y } };
+    const mirror = i => ({ x: 1 - L[i].x, y: L[i].y });   // selfie view: x grows to the user's right
+    const avg = ids => { let x = 0, y = 0; for (const i of ids) { x += 1 - L[i].x; y += L[i].y; } return { x: x / ids.length, y: y / ids.length }; };
+    return {
+      ext, spread: spreadOf(W), thumbTop, thumbRise, iscale,
+      palm: avg(PALM), tip: mirror(8), tips: avg(TIP), vee: avg([8, 12]),
+    };
   }
 
   /* ---------- pose from measurements (one frame, no memory) ---------- */
@@ -99,15 +119,22 @@
     const [I, M, R, P] = f.ext;
     if (f.ext.every(curled)) {
       if (f.thumbTop > C.thumbUpTop && f.thumbRise > C.thumbUpRise) return 'thumbsup';
-      if (f.pinch < C.pinchTight && I > 1.1) return 'pinch';
       return 'fist';
     }
-    if (f.ext.filter(ext).length >= 3) return 'open';
-    if (!ext(M) && !ext(R) && !ext(P) && !curled(I)) {
-      if (f.pinch < C.pinchClose || f.thumbFree > C.thumbFree || f.thumbOut > C.thumbOut) return 'pinch';
-      if (ext(I)) return 'point';
-    }
+    const n = f.ext.filter(ext).length;
+    if (n === 4) return f.spread < C.flatSpread ? 'flat' : 'open';
+    if (n === 3) return 'open';
+    if (ext(I) && ext(M) && !ext(R) && !ext(P)) return 'vee';
+    if (ext(I) && !ext(M) && !ext(R) && !ext(P)) return 'point';
     return 'none';
+  }
+
+  /** Which event a hold gesture fires, if any. */
+  function holdEvent(pose) {
+    if (pose === 'thumbsup') return 'click';
+    if (pose === 'fist') return 'close';
+    if (typeof pose === 'string' && pose.startsWith('cmd:')) return 'command';
+    return null;
   }
 
   /* ---------- One Euro filter (smooth when still, responsive when moving) ---------- */
@@ -131,26 +158,41 @@
     constructor(opts = {}) {
       this.C = { ...DEFAULTS, ...opts, box: { ...DEFAULTS.box, ...(opts.box || {}) } };
       this.w = 1280; this.h = 720; this.camAspect = 16 / 9;
-      this.fx = new OneEuro(this.C.pointerMinCutoff, this.C.pointerBeta);
-      this.fy = new OneEuro(this.C.pointerMinCutoff, this.C.pointerBeta);
+      const mk = () => new OneEuro(this.C.pointerMinCutoff, this.C.pointerBeta);
+      this.fx = mk(); this.fy = mk();     // pointer
+      this.px = mk(); this.py = mk();     // pan
+      this.zy = mk();                     // zoom
+      this.custom = null;
       this.reset();
     }
     setScreen(w, h) { this.w = w; this.h = h; }
     /** Width / height of the camera frame, so two-hand angles match how your hands really sit. */
     setCameraAspect(a) { if (a > 0) this.camAspect = a; }
+    /**
+     * Plug in a trained classifier: fn(hand, features) -> { pose, label } or null.
+     * `pose` is a built-in pose name ('point', 'flat', 'vee', 'fist', 'thumbsup', 'open', 'none')
+     * or 'cmd:<name>' for a hold-to-fire command. Return null to fall back to the built-in rules.
+     */
+    setClassifier(fn) { this.custom = typeof fn === 'function' ? fn : null; }
     reset() {
       this.pose = 'none'; this.cand = 'none'; this.candN = 0; this.candT = 0; this.poseT = 0;
-      this.fired = false; this.lastClick = -1e9; this.lastClose = -1e9;
-      this.samples = []; this.lastSwipe = { dir: null, t: -1e9 };
+      this.label = null; this.rawLabel = null; this.candLabel = null;
+      this.fired = false; this.lastFire = {};
       this.pointer = this.pointer || { x: this.w / 2, y: this.h / 2, visible: false };
-      this.trail = [];
-      this.zoomLn = null; this.zoomAcc = 0; this.zoomBase = 0; this.zoomOn = false;
+      this.trail = []; this.tap = null; this.tapArmed = false; this.marker = null;
+      this.pan = { last: null, anchor: null, moving: false, stillT: 0, ax: 0, ay: 0 };
+      this.zm = null;
       this.two = { n: 0, active: false, prev: null, pts: null, ema: 0, acc: 0 };
       this.graceUntil = 0; this.raw = 'none'; this.f = null;
     }
     toScreen(p) {
       const b = this.C.box;
       return { x: clamp((p.x - b.x0) / (b.x1 - b.x0), 0, 1) * this.w, y: clamp((p.y - b.y0) / (b.y1 - b.y0), 0, 1) * this.h };
+    }
+    /** Like toScreen but not clamped to the screen, for measuring movement. */
+    toScreenFree(p) {
+      const b = this.C.box;
+      return { x: (p.x - b.x0) / (b.x1 - b.x0) * this.w, y: (p.y - b.y0) / (b.y1 - b.y0) * this.h };
     }
     /** Map a screen point back to the camera point that would produce it (used by the demo). */
     fromScreen(x, y) {
@@ -159,10 +201,10 @@
     }
 
     /**
-     * @param hands array of { lm: 21 normalised {x,y,z}, world?: 21 metric {x,y,z} } — MediaPipe's
-     *              landmarks / worldLandmarks for each detected hand
+     * @param hands array of { lm: 21 normalised {x,y,z}, world?: 21 metric {x,y,z}, handed?: 'Left'|'Right' }
+     *              — MediaPipe's landmarks / worldLandmarks / handedness for each detected hand
      * @param t     timestamp in ms
-     * @returns { events, pose, mode, pointer, hold, raw, features }
+     * @returns { events, pose, label, mode, pointer, marker, tapping, hold, raw, rawLabel, features }
      */
     update(hands, t) {
       const ev = [];
@@ -176,32 +218,34 @@
         if (hands.length === 1 && t >= this.graceUntil) this.oneHand(hands[0], t, ev);
         else this.idle(t, ev);
       }
-      const holding = (this.pose === 'thumbsup' || this.pose === 'fist') && !this.fired;
+      const holding = holdEvent(this.pose) && !this.fired;
       return {
-        events: ev, pose: this.two.active ? 'two' : this.pose, raw: this.raw,
+        events: ev, pose: this.two.active ? 'two' : this.pose, label: this.label,
+        raw: this.raw, rawLabel: this.rawLabel,
         mode: this.two.active ? 'two' : hands.length ? 'one' : 'none',
-        pointer: this.pointer, features: this.f,
+        pointer: this.pointer, marker: this.marker, tapping: !!this.tap, features: this.f,
         hold: holding ? clamp((t - this.poseT) / this.C.holdMs, 0, 1) : 0,
       };
     }
 
     idle(t, ev) {
-      if (this.pose !== 'none') { this.setPose('none', t, ev); }
-      this.cand = 'none'; this.candN = 0; this.raw = 'none'; this.f = null; this.samples = [];
+      if (this.pose !== 'none') this.setPose('none', t, ev);
+      this.cand = 'none'; this.candN = 0; this.raw = 'none'; this.rawLabel = null; this.f = null; this.tap = null; this.marker = null;
     }
 
-    setPose(p, t, ev) {
+    setPose(p, t, ev, label = null) {
       const prev = this.pose;
-      const carries = q => q === 'point' || q === 'pinch';
-      if (carries(prev) && !carries(p)) this.rewindPointer();
-      this.pose = p; this.poseT = t; this.fired = false;
-      if (p === 'pinch') { this.zoomLn = null; this.zoomAcc = 0; this.zoomOn = false; }
-      if ((p === 'point' || p === 'pinch') && !carries(prev)) { this.fx.reset(); this.fy.reset(); }
-      ev.push({ type: 'pose', pose: p, from: prev });
+      if (prev === 'point' && p !== 'point') this.rewindPointer(this.candT);
+      this.pose = p; this.poseT = t; this.fired = false; this.label = label; this.tap = null; this.marker = null;
+      if (p === 'point' && prev !== 'point') { this.fx.reset(); this.fy.reset(); }
+      if (p === 'flat') this.pan = { last: null, anchor: null, moving: false, stillT: 0, ax: 0, ay: 0 };
+      this.zm = null;
+      ev.push({ type: 'pose', pose: p, from: prev, label });
     }
 
-    rewindPointer() {
-      const target = this.candT - this.C.pointerRewindMs;
+    /** Put the pointer back where it was rewindMs before `t` (before the hand started changing). */
+    rewindPointer(t) {
+      const target = t - this.C.pointerRewindMs;
       let best = null;
       for (const s of this.trail) if (s.t <= target) best = s;
       if (best) { this.pointer.x = best.x; this.pointer.y = best.y; }
@@ -210,88 +254,133 @@
     oneHand(hand, t, ev) {
       const C = this.C;
       const f = features(hand); this.f = f;
-      const raw = classify(f, C); this.raw = raw;
+      let raw = classify(f, C), label = null;
+      if (this.custom) {
+        const c = this.custom(hand, f);
+        if (c && c.pose) { raw = c.pose; label = c.label || null; }
+      }
+      this.raw = raw; this.rawLabel = label;
+
+      // a click in progress keeps the pointer pose until the finger comes back up (or the fold is held too long)
+      const tapping = this.pose === 'point' && !label && this.trackTap(f, t, ev, raw);
 
       // hysteresis: a new pose must persist for poseFrames frames
-      if (raw === this.pose) { this.cand = raw; this.candN = 0; }
+      if (tapping) { this.cand = this.pose; this.candN = 0; }
+      else if (raw === this.pose && label === this.label) { this.cand = raw; this.candN = 0; }
       else {
-        if (raw !== this.cand) { this.cand = raw; this.candN = 0; this.candT = t; }
-        if (++this.candN >= C.poseFrames) this.setPose(raw, t, ev);
+        if (raw !== this.cand || label !== this.candLabel) { this.cand = raw; this.candLabel = label; this.candN = 0; this.candT = t; }
+        if (++this.candN >= C.poseFrames) this.setPose(raw, t, ev, label);
       }
 
-      // palm track for swipes
-      this.samples.push({ t, x: f.palm.x, y: f.palm.y, open: raw === 'open' });
-      while (this.samples.length && t - this.samples[0].t > C.swipeWindowMs) this.samples.shift();
-
+      const steady = this.raw === this.pose && !tapping;   // this frame clearly shows the committed pose
       switch (this.pose) {
-        case 'point':
-        case 'pinch': {
-          // the index fingertip drives the pointer in both poses, so pointing with a
-          // relaxed thumb still works; zoom only starts once the thumb–index gap really changes
-          const s = this.toScreen(f.tip);
-          this.pointer.x = this.fx.filter(s.x, t); this.pointer.y = this.fy.filter(s.y, t); this.pointer.visible = true;
-          const trusted = this.raw === this.pose && (this.pose === 'point' || t - this.poseT > C.pinchTrailMs);
-          if (trusted) {                         // skip frames where the hand is changing shape
-            this.trail.push({ t, x: this.pointer.x, y: this.pointer.y });
-            while (this.trail.length && t - this.trail[0].t > 600) this.trail.shift();
+        case 'point': {
+          if (!tapping) {
+            const s = this.toScreen(f.tip);
+            this.pointer.x = this.fx.filter(s.x, t); this.pointer.y = this.fy.filter(s.y, t);
+            if (steady) {                                    // skip frames where the hand is changing shape
+              this.trail.push({ t, x: this.pointer.x, y: this.pointer.y });
+              while (this.trail.length && t - this.trail[0].t > 600) this.trail.shift();
+            }
           }
+          this.pointer.visible = true;
           ev.push({ type: 'pointer', x: this.pointer.x, y: this.pointer.y });
-          if (this.pose === 'pinch' && this.raw === 'pinch' && t - this.poseT >= C.zoomSettleMs) this.zoom(f, ev);
           break;
         }
-        case 'thumbsup':
-          if (!this.fired && t - this.poseT >= C.holdMs) {
+        case 'flat': this.doPan(f, t, ev, steady); break;
+        case 'vee': this.doZoom(f, t, ev, steady); break;
+        default: {
+          const type = holdEvent(this.pose);
+          if (type && !this.fired && t - this.poseT >= C.holdMs) {
             this.fired = true;
-            if (t - this.lastClick >= C.actionCooldownMs) { this.lastClick = t; ev.push({ type: 'click', x: this.pointer.x, y: this.pointer.y }); }
+            const key = type === 'command' ? this.pose : type;
+            if (t - (this.lastFire[key] ?? -1e9) >= C.actionCooldownMs) {
+              this.lastFire[key] = t;
+              if (type === 'command') ev.push({ type, name: this.pose.slice(4), label: this.label, x: this.pointer.x, y: this.pointer.y });
+              else if (type === 'click') ev.push({ type, x: this.pointer.x, y: this.pointer.y });
+              else ev.push({ type });
+            }
           }
-          break;
-        case 'fist':
-          if (!this.fired && t - this.poseT >= C.holdMs) {
-            this.fired = true;
-            if (t - this.lastClose >= C.actionCooldownMs) { this.lastClose = t; ev.push({ type: 'close' }); }
-          }
-          break;
-        case 'open':
-          this.detectSwipe(t, ev);
-          break;
+        }
       }
     }
 
-    zoom(f, ev) {
-      const C = this.C, ln = Math.log(Math.max(f.pinch, 0.05));
-      if (this.zoomLn === null) { this.zoomLn = ln; this.zoomBase = ln; this.zoomOn = false; return; }
-      const sm = this.zoomLn + (ln - this.zoomLn) * (1 - C.zoomSmoothing);
-      if (!this.zoomOn) {
-        this.zoomLn = sm;
-        if (Math.abs(sm - this.zoomBase) > C.zoomLatch) { this.zoomOn = true; this.zoomAcc = 0; }
+    /** Finger-fold click. Returns true while a fold is in progress. */
+    trackTap(f, t, ev, raw) {
+      const C = this.C, I = f.ext[0];
+      const othersUp = f.ext[1] > C.extOn || f.ext[2] > C.extOn || f.ext[3] > C.extOn;
+      if (I > C.tapUp) this.tapArmed = true;
+      if (!this.tap) {
+        if (!this.tapArmed || I >= C.extOn || othersUp) return false;
+        this.tapArmed = false;
+        this.tap = { t0: t, min: I };
+        this.rewindPointer(t);                 // freeze where the finger was pointing just before it moved
+      }
+      const T = this.tap;
+      T.min = Math.min(T.min, I);
+      T.thumbN = raw === 'thumbsup' ? (T.thumbN || 0) + 1 : 0;
+      if (othersUp || T.thumbN >= C.tapThumbFrames) { this.tap = null; return false; }   // turning into another pose
+      const dur = t - T.t0;
+      if (I > C.tapUp) {                                         // finger is back up
+        this.tap = null;
+        if (T.min < C.tapDepth && dur >= C.tapMinMs && dur <= C.tapMaxMs && t - (this.lastFire.click ?? -1e9) >= C.clickCooldownMs) {
+          this.lastFire.click = t;
+          ev.push({ type: 'click', x: this.pointer.x, y: this.pointer.y, via: 'tap' });
+        }
+        return true;
+      }
+      if (dur > C.tapMaxMs) { this.tap = null; return false; }  // held: let it become a fist
+      return true;
+    }
+
+    doPan(f, t, ev, steady) {
+      const C = this.C, P = this.pan;
+      this.marker = this.toScreen(f.tips);
+      if (!steady || t - this.poseT < C.panSettleMs) { P.last = null; return; }
+      const s = this.toScreenFree(f.tips);
+      if (!P.last) {
+        this.px.reset(); this.py.reset(); P.last = { x: this.px.filter(s.x, t), y: this.py.filter(s.y, t) };
+        if (!P.anchor) P.anchor = { ...P.last };
         return;
       }
-      this.zoomAcc += sm - this.zoomLn; this.zoomLn = sm;
-      if (Math.abs(this.zoomAcc) > C.zoomDeadband) {
-        ev.push({ type: 'zoom', factor: Math.exp(C.zoomGain * this.zoomAcc), x: this.pointer.x, y: this.pointer.y });
-        this.zoomAcc = 0;
-      }
+      const x = this.px.filter(s.x, t), y = this.py.filter(s.y, t);
+      const step = Math.hypot(x - P.last.x, y - P.last.y);
+      // a still hand never moves the map: movement starts only once the hand leaves a small dead zone,
+      // and stops again after the hand has been still for a moment
+      if (!P.moving) {
+        if (Math.hypot(x - P.anchor.x, y - P.anchor.y) < C.panStart) { P.last = { x, y }; return; }
+        P.moving = true; P.stillT = t;
+      } else if (step > C.panStill) P.stillT = t;
+      else if (t - P.stillT > C.panStillMs) { P.moving = false; P.anchor = { x, y }; P.last = { x, y }; P.ax = P.ay = 0; return; }
+      P.ax += (x - P.last.x) * C.panGain; P.ay += (y - P.last.y) * C.panGain; P.last = { x, y };
+      if (Math.hypot(P.ax, P.ay) > C.panDeadband) { ev.push({ type: 'pan', dx: P.ax, dy: P.ay }); P.ax = 0; P.ay = 0; }
     }
 
-    detectSwipe(t, ev) {
-      const C = this.C, S = this.samples;
-      if (S.length < 4 || t - this.lastSwipe.t < C.swipeCooldownMs) return;
-      if (S.filter(s => s.open).length / S.length < C.swipeOpenShare) return;
-      const a = S[0], b = S[S.length - 1];
-      const dx = b.x - a.x, dy = b.y - a.y, ax = Math.abs(dx), ay = Math.abs(dy);
-      const horiz = ax >= ay, dist = horiz ? ax : ay, other = horiz ? ay : ax;
-      if (dist < C.swipeDist || dist < other * C.swipeAxisRatio) return;
-      const dir = horiz ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-      const opposite = { left: 'right', right: 'left', up: 'down', down: 'up' }[dir];
-      if (this.lastSwipe.dir === opposite && t - this.lastSwipe.t < C.swipeReturnMs && dist < C.swipeReturnDist) return;
-      this.lastSwipe = { dir, t }; this.samples = [];
-      ev.push({ type: 'swipe', dir });
+    doZoom(f, t, ev, steady) {
+      const C = this.C;
+      if (!this.zm) this.zm = { anchor: this.toScreen(f.vee), base: null, last: null, on: false, acc: 0 };
+      const Z = this.zm;
+      this.marker = Z.anchor;
+      if (!steady || t - this.poseT < C.zoomSettleMs) { Z.last = null; return; }
+      const sy = this.toScreenFree(f.vee).y;
+      if (Z.last === null) { this.zy.reset(); Z.last = this.zy.filter(sy, t); if (Z.base === null) Z.base = Z.last; return; }
+      const y = this.zy.filter(sy, t);
+      if (!Z.on) {
+        Z.last = y;
+        if (Math.abs(y - Z.base) > C.zoomLatch * this.h) { Z.on = true; Z.acc = 0; }
+        return;
+      }
+      Z.acc += (Z.last - y) / this.h; Z.last = y;            // hand up (y smaller) = zoom in
+      if (Math.abs(Z.acc) > C.zoomDeadband) {
+        ev.push({ type: 'zoom', factor: Math.exp(C.zoomGain * Z.acc), x: Z.anchor.x, y: Z.anchor.y });
+        Z.acc = 0;
+      }
     }
 
     twoHands(hands, t, ev) {
       const C = this.C, T = this.two;
-      if (this.pose !== 'none') { this.setPose('none', t, ev); }
-      this.cand = 'none'; this.candN = 0; this.raw = 'two'; this.f = null; this.samples = [];
+      if (this.pose !== 'none') this.setPose('none', t, ev);
+      this.cand = 'none'; this.candN = 0; this.raw = 'two'; this.rawLabel = null; this.f = null; this.tap = null;
       const pts = hands.map(h => features(h).palm);
       if (T.pts) {   // keep each hand matched to itself so the angle never flips
         const keep = Math.hypot(pts[0].x - T.pts[0].x, pts[0].y - T.pts[0].y) + Math.hypot(pts[1].x - T.pts[1].x, pts[1].y - T.pts[1].y);
@@ -313,5 +402,5 @@
     }
   }
 
-  return { DEFAULTS, features, classify, Engine, OneEuro };
+  return { DEFAULTS, features, classify, spreadOf, holdEvent, Engine, OneEuro };
 });

@@ -112,24 +112,19 @@ function focusPlace(p, zoom) { animateTo({ cx: p.x, cy: p.y, z: Math.max(view.z,
 /* ============ 4. Gesture engine + actions ============ */
 const engine = new Gestures.Engine();
 let handOn = false, paused = false, demo = null, lastFrame = null;
-const flash = { swipe: null, t: 0 };
 
 function act(e) {
   switch (e.type) {
-    case 'swipe': {
-      const step = Math.min(W, H) * 0.45;
-      const d = { left: [-step, 0], right: [step, 0], up: [0, -step], down: [0, step] }[e.dir];
-      panAnimated(d[0], d[1]); flash.swipe = e.dir; flash.t = performance.now();
-      toast(`Swipe ${e.dir}`); break;
-    }
+    case 'pan': stopAnim(); panBy(clamp(e.dx, -200, 200), clamp(e.dy, -200, 200)); break;
     case 'zoom': stopAnim(); zoomAt(e.x, e.y, clamp(e.factor, 0.7, 1.4)); break;
+    case 'command': runCommand(e.name, e.label); break;
     case 'rotate': stopAnim(); rotateBy(e.delta); break;
     case 'click': {
       const p = pickPlace(e.x, e.y);
       if (p) { select(p); toast(`Opened ${p.name}`); break; }
       const el = gxElementAt(e.x, e.y);
       if (el) { el.click(); toast(`Pressed ${el.textContent.trim().slice(0, 28)}`); break; }
-      toast('Point at a place first, then 👍'); break;
+      toast('Point at a place first, then fold your finger'); break;
     }
     case 'close':
       if (S.sel) { toast(`Closed ${S.sel.name}`); select(null); }
@@ -138,6 +133,21 @@ function act(e) {
       else toast('Nothing open to close');
       break;
   }
+}
+
+const COMMANDS = {
+  home: ['Reset view', () => { select(null); home(); }],
+  zoomin: ['Zoom in', () => animateTo({ z: view.z * 1.6 }, 300)],
+  zoomout: ['Zoom out', () => animateTo({ z: view.z / 1.6 }, 300)],
+  rotl: ['Rotate left', () => animateTo({ r: view.r - 0.3 }, 300)],
+  rotr: ['Rotate right', () => animateTo({ r: view.r + 0.3 }, 300)],
+  explore: ['Explore', () => openExplore()],
+  locate: ['My location', () => locate()],
+  help: ['Help', () => $('#help').classList.toggle('show')],
+};
+function runCommand(name, label) {
+  const c = COMMANDS[name]; if (!c) return;
+  c[1](); toast(label ? `${label} → ${c[0]}` : c[0]);
 }
 
 function gxElementAt(x, y) {
@@ -155,30 +165,35 @@ function updateGxHover(x, y, show) {
 
 const POSE_UI = {
   none: ['✋', 'Show your hand', 'hold it 40–70 cm from the camera'],
-  open: ['🖐️', 'Open palm', 'swipe quickly to move the map'],
-  point: ['☝️', 'Pointer', 'move your finger · 👍 to open'],
-  pinch: ['🤏', 'Pinch zoom', 'spread to zoom in · close to zoom out'],
+  open: ['🖐️', 'Open palm', 'resting · put four fingers together to grab'],
+  flat: ['✋', 'Grab', 'move your hand to drag the map'],
+  vee: ['✌️', 'Zoom', 'move up to zoom in · down to zoom out'],
+  point: ['☝️', 'Pointer', 'fold your finger and lift it to open'],
+  tap: ['👇', 'Click', 'lift your finger again'],
   thumbsup: ['👍', 'Thumbs up', 'hold to open'],
   fist: ['✊', 'Fist', 'hold to close'],
   two: ['🙌', 'Two hands', 'turn them like a wheel to rotate'],
 };
 let lastPose = '';
-function showPose(pose) {
-  if (pose === lastPose) return; lastPose = pose;
-  const [i, n, h] = POSE_UI[pose] || POSE_UI.none;
+function showPose(pose, label) {
+  const key = pose + '|' + (label || '');
+  if (key === lastPose) return; lastPose = key;
+  let [i, n, h] = POSE_UI[pose] || POSE_UI.none;
+  if (label) { const a = GestureTrainer.ACTIONS.find(x => x.pose === pose); i = '🧠'; n = label; h = a ? `${a.name} · ${a.hint}` : 'trained gesture'; }
   $('#poseIcon').textContent = i; $('#poseName').textContent = n; $('#poseHint').textContent = h;
-  const g = pose === 'thumbsup' || pose === 'fist' || pose === 'point' || pose === 'pinch' || pose === 'two' || pose === 'open' ? pose : '';
-  document.querySelectorAll('#glist li').forEach(li => li.classList.toggle('on', li.dataset.g === g));
+  document.querySelectorAll('#glist li').forEach(li => li.classList.toggle('on', !label && li.dataset.g === pose));
 }
+const HOLD_POSES = p => p === 'thumbsup' || p === 'fist' || (p || '').startsWith('cmd:');
 
 /** Every input source (camera or demo) ends up here, once per video frame. */
 function onHands(hands, t, source) {
   if (paused && source === 'camera') hands = [];
   const r = engine.update(hands, t);
-  r.events.forEach(act);
+  if (!Train.busy()) r.events.forEach(act);
   lastFrame = { ...r, hands, t: performance.now(), source };
-  showPose(hands.length ? r.pose : 'none');
-  const pv = r.pointer.visible && (r.pose === 'point' || r.pose === 'pinch' || r.pose === 'thumbsup' || r.pose === 'fist');
+  showPose(hands.length ? (r.tapping ? 'tap' : r.pose) : 'none', hands.length ? r.label : null);
+  Train.frame(hands, r, source);
+  const pv = r.pointer.visible && (r.pose === 'point' || HOLD_POSES(r.pose));
   updateGxHover(r.pointer.x, r.pointer.y, pv);
   if (pv) S.hover = pickPlace(r.pointer.x, r.pointer.y); else if (hands.length) S.hover = null;
   drawCam(hands, source);
@@ -227,7 +242,8 @@ function pollCamera() {
   lastVT = vid.currentTime;
   const t = performance.now();
   const res = landmarker.detectForVideo(vid, t);
-  const hands = (res.landmarks || []).map((lm, i) => ({ lm, world: res.worldLandmarks?.[i] }));
+  const hd = res.handedness || res.handednesses || [];
+  const hands = (res.landmarks || []).map((lm, i) => ({ lm, world: res.worldLandmarks?.[i], handed: hd[i]?.[0]?.categoryName }));
   onHands(hands, t, 'camera');
 }
 
@@ -248,6 +264,7 @@ function drawCam(hands, source) {
   });
   if (source === 'demo') { cc.fillStyle = 'rgba(255,92,240,.85)'; cc.font = '600 10px JetBrains Mono, monospace'; cc.fillText('SIMULATED HAND', 8, 16); }
   cc.restore();
+  Train.mirrorCam(cam);
 }
 
 /* ============ 6. Demo: a simulated hand drives the real engine ============ */
@@ -297,15 +314,14 @@ function buildDemo() {
     return [SynthHand.hand({ pose: 'open', x: 0.5 - dx, y: 0.6 - dy, size: 1.3, noise: 0.0008 }),
             SynthHand.hand({ pose: 'open', x: 0.5 + dx, y: 0.6 + dy, size: 1.3, noise: 0.0008 })];
   };
+  const tap = c => [SynthHand.hand({ pose: 'point', curls: [c, 1, 1, 1], noise: 0.0008, x: to.x, y: to.y })];
   return [
-    { ms: 1200, cap: 'Open palm: the rest pose', start: () => { Object.assign(view, HOME); select(null); }, hands: () => H1({ pose: 'open', x: 0.55, y: 0.78 }) },
-    { ms: 1100, cap: 'Swipe left: the map moves left', hands: p => H1({ pose: 'open', x: p < 0.25 ? 0.62 - 0.32 * ease(p / 0.25) : 0.30, y: 0.78 }) },
-    gap,
-    { ms: 1100, cap: 'Swipe up: the map moves up', hands: p => H1({ pose: 'open', x: 0.5, y: p < 0.25 ? 0.9 - 0.28 * ease(p / 0.25) : 0.62 }) },
-    gap,
-    { ms: 1100, cap: 'Swipe right and down to come back', hands: p => H1({ pose: 'open', x: p < 0.25 ? 0.32 + 0.32 * ease(p / 0.25) : 0.64, y: 0.78 }) },
-    gap,
-    { ms: 1100, cap: 'Swipe right and down to come back', hands: p => H1({ pose: 'open', x: 0.5, y: p < 0.25 ? 0.6 + 0.28 * ease(p / 0.25) : 0.88 }) },
+    { ms: 1300, cap: 'Spread palm: the rest pose', start: () => { Object.assign(view, HOME); select(null); }, hands: () => H1({ pose: 'open', x: 0.6, y: 0.78 }) },
+    { ms: 500, cap: 'Four fingers together: grab the map', hands: p => H1({ pose: 'open', together: ease(p), x: 0.6, y: 0.78 }) },
+    { ms: 1500, cap: 'Move your hand: the map follows', hands: p => H1({ pose: 'flat', x: 0.6 - 0.2 * ease(clamp((p - 0.15) / 0.75, 0, 1)), y: 0.78 }) },
+    { ms: 1300, cap: 'Move your hand: the map follows', hands: p => H1({ pose: 'flat', x: 0.4, y: 0.78 - 0.14 * ease(clamp((p - 0.1) / 0.75, 0, 1)) }) },
+    { ms: 600, cap: 'Spread your fingers to let go', hands: p => H1({ pose: 'open', together: 1 - ease(p), x: 0.4, y: 0.64 }) },
+    { ms: 900, cap: 'A spread palm moves freely', hands: p => H1({ pose: 'open', x: 0.4 + 0.2 * ease(p), y: 0.64 + 0.14 * ease(p) }) },
     gap,
     { ms: 1900, cap: 'One finger: move the pointer onto a place',
       start: () => {
@@ -314,15 +330,15 @@ function buildDemo() {
         from = { x: 0.42, y: 0.84 }; to = { x: cam.x - tipOff.x, y: cam.y - tipOff.y };
       },
       hands: p => { const q = ease(clamp(p / 0.7, 0, 1)); return H1({ pose: 'point', x: from.x + (to.x - from.x) * q, y: from.y + (to.y - from.y) * q }); } },
-    { ms: 1100, cap: 'Thumbs up: open it', hands: p => H1({ pose: p < 0.08 ? 'relaxed' : 'thumbsup', x: to.x, y: to.y + 0.03 }) },
-    { ms: 1700, cap: 'Thumbs up: open it', hands: () => H1({ pose: 'open', x: to.x, y: to.y + 0.03 }) },
+    { ms: 1600, cap: 'Fold your finger and lift it: open it', hands: p => tap(p < 0.1 ? 0 : p < 0.28 ? 0.85 * Math.sin(Math.PI * (p - 0.1) / 0.18) : 0) },
+    { ms: 900, cap: 'Fold your finger and lift it: open it', hands: () => H1({ pose: 'open', x: to.x, y: to.y + 0.03 }) },
     { ms: 1100, cap: 'Fist: close it', hands: () => H1({ pose: 'fist', x: to.x, y: to.y + 0.03 }) },
     gap,
-    { ms: 1700, cap: 'Pinch out: zoom in', hands: p => H1({ pose: 'pinch', spread: 0.12 + 0.85 * ease(clamp((p - 0.15) / 0.75, 0, 1)), x: to.x, y: to.y }) },
-    { ms: 1700, cap: 'Pinch in: zoom out', hands: p => H1({ pose: 'pinch', spread: 0.97 - 0.85 * ease(clamp((p - 0.1) / 0.75, 0, 1)), x: to.x, y: to.y }) },
+    { ms: 1800, cap: 'Two fingers, move up: zoom in', hands: p => H1({ pose: 'vee', x: to.x, y: to.y - 0.22 * ease(clamp((p - 0.2) / 0.7, 0, 1)) }) },
+    { ms: 1800, cap: 'Move down: zoom out', hands: p => H1({ pose: 'vee', x: to.x, y: to.y - 0.22 + 0.22 * ease(clamp((p - 0.1) / 0.7, 0, 1)) }) },
     gap,
     { ms: 2600, cap: 'Two hands: turn them to rotate', hands: p => pair(p < 0.2 ? 0 : p < 0.6 ? 28 * ease((p - 0.2) / 0.4) : 28 - 28 * ease(clamp((p - 0.65) / 0.3, 0, 1))) },
-    { ms: 900, cap: 'That’s every gesture. Turn on ✋ Hands to try it.', start: () => home() },
+    { ms: 1400, cap: 'Make up your own gestures with 🧠 Train', start: () => home() },
   ];
 }
 
@@ -454,15 +470,6 @@ function drawFx(now) {
     for (let k = 0; k < 16; k++) { const an = k / 16 * 6.283 + b.p.ph, d = 10 + e * 46 * (k % 2 ? 0.7 : 1); fc.beginPath(); fc.arc(bx + Math.cos(an) * d, by + Math.sin(an) * d, 2.4 * (1 - a) + 0.6, 0, 6.283); fc.fill(); }
     fc.strokeStyle = b.col; fc.lineWidth = 2; fc.beginPath(); fc.arc(bx, by, 8 + e * 30, 0, 6.283); fc.stroke(); fc.globalAlpha = 1;
   }
-  // swipe flash
-  if (flash.swipe && now - flash.t < 600) {
-    const a = 1 - (now - flash.t) / 600, d = flash.swipe, ang = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 }[d];
-    fc.save(); fc.translate(W / 2, H / 2); fc.rotate(ang); fc.globalAlpha = a * 0.8;
-    fc.strokeStyle = '#7cf3ff'; fc.lineWidth = 6; fc.lineCap = 'round';
-    const off = (1 - a) * 60;
-    fc.beginPath(); fc.moveTo(-50 + off, 0); fc.lineTo(50 + off, 0); fc.moveTo(22 + off, -28); fc.lineTo(50 + off, 0); fc.lineTo(22 + off, 28); fc.stroke();
-    fc.restore();
-  }
   const F = lastFrame;
   if (!F || now - F.t > 400 || !F.hands.length) return;
   if (F.mode === 'two' && engine.two.pts) {
@@ -473,18 +480,33 @@ function drawFx(now) {
     return;
   }
   const P = F.pointer, pose = F.pose;
+  if ((pose === 'flat' || pose === 'vee') && F.marker) { drawMarker(F.marker, pose); return; }
   if (!P.visible) return;
-  const col = { point: '#7cf3ff', pinch: '#ff5cf0', thumbsup: '#4ade80', fist: '#ffb020' }[pose] || 'rgba(232,236,255,.45)';
+  const col = F.tapping ? '#4ade80' : { point: '#7cf3ff', thumbsup: '#4ade80', fist: '#ffb020' }[pose] || (HOLD_POSES(pose) ? '#b794ff' : 'rgba(232,236,255,.45)');
   fc.strokeStyle = col; fc.fillStyle = col; fc.lineWidth = 2;
-  fc.beginPath(); fc.arc(P.x, P.y, pose === 'pinch' ? 10 : 14, 0, 6.283); fc.stroke();
-  fc.beginPath(); fc.arc(P.x, P.y, 3, 0, 6.283); fc.fill();
+  fc.beginPath(); fc.arc(P.x, P.y, F.tapping ? 9 : 14, 0, 6.283); fc.stroke();
+  fc.beginPath(); fc.arc(P.x, P.y, F.tapping ? 5 : 3, 0, 6.283); fc.fill();
   if (F.hold > 0) { fc.lineWidth = 4; fc.beginPath(); fc.arc(P.x, P.y, 22, -Math.PI / 2, -Math.PI / 2 + F.hold * 6.283); fc.stroke(); }
-  if (S.hover && (pose === 'point' || pose === 'pinch')) {
+  if (S.hover && pose === 'point') {
     fc.strokeStyle = hexA(CATS[S.hover.cat].color, 0.7); fc.lineWidth = 1; fc.setLineDash([3, 4]);
     fc.beginPath(); fc.moveTo(P.x, P.y); fc.lineTo(S.hover.sx, S.hover.sy); fc.stroke(); fc.setLineDash([]);
   }
 }
 
+/** Grab (pan) and zoom markers: where your hand is holding the map. */
+function drawMarker(m, pose) {
+  const col = pose === 'flat' ? '#7cf3ff' : '#ff5cf0';
+  fc.save(); fc.translate(m.x, m.y); fc.strokeStyle = col; fc.fillStyle = col; fc.lineWidth = 2; fc.lineCap = 'round'; fc.lineJoin = 'round';
+  fc.beginPath(); fc.arc(0, 0, 16, 0, 6.283); fc.stroke();
+  const arrow = (a) => { fc.save(); fc.rotate(a); fc.beginPath(); fc.moveTo(22, 0); fc.lineTo(32, 0); fc.moveTo(28, -4); fc.lineTo(32, 0); fc.lineTo(28, 4); fc.stroke(); fc.restore(); };
+  if (pose === 'flat') { for (let k = 0; k < 4; k++) arrow(k * Math.PI / 2); fc.beginPath(); fc.arc(0, 0, 3, 0, 6.283); fc.fill(); }
+  else {
+    arrow(-Math.PI / 2); arrow(Math.PI / 2);
+    fc.beginPath(); fc.moveTo(-6, 0); fc.lineTo(6, 0); fc.stroke();
+    fc.font = '600 11px JetBrains Mono, monospace'; fc.textAlign = 'center'; fc.fillText('+', 0, -38); fc.fillText('−', 0, 46);
+  }
+  fc.restore();
+}
 
 /* ============ 9b. Explore: top places, points, badges, sharing ============ */
 const CITY_ID = (() => { const id = new URLSearchParams(location.search).get('city') || document.documentElement.dataset.city || 'bengaluru'; return /^[a-z0-9_-]+$/i.test(id) ? id : 'bengaluru'; })();
@@ -725,6 +747,132 @@ function drawMe(now) {
   ctx.fillStyle = '#4285f4'; ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 6.283); ctx.fill();
 }
 
+/* ============ 9d. Train: teach the map your own gestures ============ */
+const Train = (() => {
+  const KEY = 'gcm:gestures:v1', COUNT_MS = 2400, RECORD_MS = 2000;
+  const panel = $('#train'), tcam = $('#tcam'), tctx = tcam.getContext('2d'), pred = $('#tpred'), count = $('#tcount');
+  const model = new GestureTrainer.Model();
+  try { const raw = localStorage.getItem(KEY); if (raw) model.load(raw); } catch (err) { console.warn('[Gesture City Map] could not load trained gestures', err); }
+  engine.setClassifier(model.classifier());
+  let rec = null, evals = {}, lastPred = 0;
+
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(model.toJSON())); } catch { toast('Could not save: browser storage is full or blocked. Export to keep your gestures.', 4200); } };
+  const isOpen = () => !panel.hidden;
+  const actionOpts = sel => GestureTrainer.ACTIONS.map(a => `<option value="${a.id}"${a.id === sel ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+  $('#taction').innerHTML = actionOpts('home');
+
+  function open() { panel.hidden = false; $('#btnTrain').classList.add('on'); render(); }
+  function close() { panel.hidden = true; $('#btnTrain').classList.remove('on'); rec = null; count.textContent = ''; }
+  function toggle() { isOpen() ? close() : open(); }
+
+  function quality(g) {
+    const n = model.count(g.id), e = evals[g.id];
+    if (n < model.C.minSamples) return `<span class="tq warn">${n ? 'Record a bit more' : 'Not recorded yet'} (needs ${model.C.minSamples}+ samples)</span>`;
+    if (!e || e.accuracy == null) return '';
+    const pct = Math.round(e.accuracy * 100), la = e.lookalike && e.lookalike.share >= 0.05 ? e.lookalike : null;
+    const mix = la ? ` · mixed up with <b>${esc(la.name)}</b> ${Math.round(la.share * 100)}% of the time` : '';
+    return `<span class="tq ${pct >= 90 && !la ? 'ok' : 'warn'}">${pct}% recognised${mix}</span>`;
+  }
+  function render() {
+    evals = model.evaluate();
+    $('#tlist').innerHTML = model.gestures.length ? model.gestures.map(g => `
+      <li data-id="${g.id}"${rec && rec.id === g.id ? ' class="rec"' : ''}>
+        <div class="tl1"><b>${esc(g.name)}</b><span class="tn">${model.count(g.id)} samples</span></div>
+        <div class="tl2"><select data-act aria-label="What ${esc(g.name)} does">${actionOpts(g.action)}</select><button data-rec data-gx>● Record</button><button data-reset data-gx title="Delete its samples">↺</button><button data-del data-gx title="Delete gesture">🗑</button></div>
+        ${quality(g)}
+      </li>`).join('') : '<li class="tempty">No gestures yet. Name one above and press Add.</li>';
+    $('#tenabled').checked = model.enabled;
+  }
+
+  async function record(id) {
+    if (rec) return;
+    if (demo) stopDemo();
+    if (!handOn) { await startHands(); if (!handOn) return; }
+    rec = { id, phase: 'count', t0: performance.now(), got: 0 };
+    render();
+  }
+
+  /** Called for every hand frame (camera or demo). */
+  function frame(hands, r, source) {
+    if (!isOpen()) return;
+    const now = performance.now();
+    if (rec) {
+      if (rec.phase === 'count' && now - rec.t0 >= COUNT_MS) { rec.phase = 'rec'; rec.t0 = now; }
+      if (rec.phase === 'rec') {
+        if (source === 'camera' && hands.length === 1 && model.addSample(rec.id, hands[0])) rec.got++;
+        if (now - rec.t0 >= RECORD_MS) {
+          const g = model.gesture(rec.id), got = rec.got;
+          rec = null; count.textContent = ''; save(); render();
+          toast(got ? `Recorded ${got} samples of ${g ? g.name : 'the gesture'}` : 'No hand seen. Show one hand to the camera and try again.', 2600);
+        }
+      }
+      if (rec) {
+        const el = now - rec.t0;
+        if (rec.phase === 'count') { count.className = 'count'; count.textContent = String(Math.max(1, Math.ceil((COUNT_MS - el) / 800))); }
+        else { count.className = 'rec'; count.innerHTML = `● REC ${hands.length === 1 ? '' : '· show one hand'}<i style="width:${Math.min(100, 100 * el / RECORD_MS)}%"></i>`; }
+      }
+    }
+    if (now - lastPred > 90) { lastPred = now; showPred(hands, r); }
+  }
+
+  function showPred(hands, r) {
+    pred.classList.remove('hit');
+    if (!hands.length) { pred.innerHTML = handOn ? '<b>Show one hand</b><small>40–70 cm from the camera</small>' : '<b>Camera off</b><small>Recording turns it on</small>'; return; }
+    if (hands.length > 1) { pred.innerHTML = '<b>🙌 Two hands</b><small>rotate · use one hand to train</small>'; return; }
+    const p = model.predict(hands[0]);
+    if (p && p.accepted && model.enabled) {
+      pred.classList.add('hit');
+      pred.innerHTML = `<b>🧠 ${esc(p.gesture.name)}</b><small>${esc(p.action.name)} · ${Math.round(p.share * 100)}% of neighbours agree</small><div class="tbar"><i style="width:${Math.round(100 * Math.max(0, 1 - p.dist / p.reach))}%"></i></div>`;
+      return;
+    }
+    const ui = POSE_UI[r.raw] || ['✋', 'No gesture', ''];
+    const near = p && model.enabled ? `closest trained: ${esc(p.gesture.name)}, not sure enough` : 'built-in gesture';
+    pred.innerHTML = `<b>${ui[0]} ${esc(ui[1])}</b><small>${near}</small>`;
+  }
+
+  function addGesture() {
+    const name = $('#tname').value.trim();
+    if (!name) { $('#tname').focus(); toast('Give your gesture a name first'); return; }
+    if (model.gestures.some(g => g.name.toLowerCase() === name.toLowerCase())) { toast(`You already have “${name}”. Press ● Record on it to add more.`, 2600); return; }
+    const g = model.addGesture(name, $('#taction').value);
+    $('#tname').value = ''; save(); render(); record(g.id);
+  }
+  $('#tadd').onclick = addGesture;
+  $('#tname').addEventListener('keydown', e => { if (e.key === 'Enter') addGesture(); e.stopPropagation(); });
+  $('#trainClose').onclick = close;
+  $('#tenabled').onchange = e => { model.enabled = e.target.checked; save(); toast(model.enabled ? 'Trained gestures on' : 'Trained gestures off: built-in gestures only'); };
+  $('#tlist').addEventListener('change', e => {
+    const li = e.target.closest('li[data-id]');
+    if (li && e.target.matches('[data-act]')) { model.update(li.dataset.id, { action: e.target.value }); save(); render(); }
+  });
+  $('#tlist').addEventListener('click', e => {
+    const li = e.target.closest('li[data-id]'), b = e.target.closest('button'); if (!li || !b) return;
+    const id = li.dataset.id, g = model.gesture(id); if (!g) return;
+    if (b.matches('[data-rec]')) record(id);
+    else if (b.matches('[data-reset]')) { if (confirm(`Delete all ${model.count(id)} samples of “${g.name}”?`)) { model.clearSamples(id); save(); render(); } }
+    else if (b.matches('[data-del]')) { if (confirm(`Delete the gesture “${g.name}”?`)) { model.removeGesture(id); save(); render(); } }
+  });
+  $('#texport').onclick = () => {
+    if (!model.gestures.length) { toast('Nothing to export yet'); return; }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(model.toJSON())], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'gesture-city-map-gestures.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  $('#timport').onclick = () => $('#tfile').click();
+  $('#tfile').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { model.load(await f.text()); save(); render(); toast(`Imported ${model.gestures.length} gesture${model.gestures.length === 1 ? '' : 's'}`); }
+    catch { toast('That file is not a gesture export'); }
+  };
+  $('#tclear').onclick = () => { if (model.gestures.length && confirm('Delete all trained gestures?')) { model.clearAll(); save(); render(); } };
+
+  return {
+    open, close, toggle, frame, model,
+    busy: () => !!rec,
+    mirrorCam: src => { if (isOpen()) tctx.drawImage(src, 0, 0, tcam.width, tcam.height); },
+  };
+})();
+
 /* ============ 10. Main loop ============ */
 function loop(now) {
   if (anim) {
@@ -772,10 +920,10 @@ cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', e
 cv.addEventListener('wheel', e => { e.preventDefault(); stopAnim(); if (demo) stopDemo(); demoLater(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 
 addEventListener('keydown', e => {
-  if (e.target === search) return;
+  if (e.target === search || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
   const k = e.key, step = Math.min(W, H) * 0.3;
   if (k === '/') { e.preventDefault(); search.focus(); }
-  else if (k === 'Escape') { select(null); closeOverlays(); stopDemo(); }
+  else if (k === 'Escape') { select(null); closeOverlays(); stopDemo(); Train.close(); }
   else if (k === 'ArrowLeft') panAnimated(-step, 0); else if (k === 'ArrowRight') panAnimated(step, 0);
   else if (k === 'ArrowUp') panAnimated(0, -step); else if (k === 'ArrowDown') panAnimated(0, step);
   else if (k === '+' || k === '=') animateTo({ z: view.z * 1.6 }, 300); else if (k === '-') animateTo({ z: view.z / 1.6 }, 300);
@@ -784,6 +932,7 @@ addEventListener('keydown', e => {
   else if (k === 'h' || k === 'H') handOn ? stopHands() : startHands();
   else if (k === '?') $('#help').classList.toggle('show');
   else if (k === 'l' || k === 'L') locate();
+  else if (k === 't' || k === 'T') Train.toggle();
   else if (k === 'x' || k === 'X') $('#explore').classList.contains('show') ? closeOverlays() : openExplore();
   else if (k === ' ' && handOn) { e.preventDefault(); togglePause(); }
 });
@@ -795,6 +944,7 @@ let toastT = 0;
 function toast(msg, ms = 1800) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), ms); }
 
 $('#btnHands').onclick = () => handOn ? stopHands() : startHands();
+$('#btnTrain').onclick = () => Train.toggle();
 $('#btnPause').onclick = togglePause;
 $('#btnDemo').onclick = () => demo ? stopDemo() : startDemo();
 $('#btnReset').onclick = () => { select(null); home(); };
@@ -818,5 +968,5 @@ const qs = new URLSearchParams(location.search);
 if (EMBED) { document.body.classList.add('embed'); closeOverlays(); startDemo(); }
 else if (qs.has('demo')) startDemo();
 requestAnimationFrame(loop);
-window.GestureCityMap = { view, places, engine, onHands, startDemo, stopDemo, select, home, w2s, explore: XP, openExplore, openShare, setVisit };
+window.GestureCityMap = { view, places, engine, onHands, startDemo, stopDemo, select, home, w2s, explore: XP, openExplore, openShare, setVisit, train: Train };
 })();

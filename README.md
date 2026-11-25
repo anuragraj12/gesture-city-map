@@ -1,8 +1,8 @@
 # Gesture City Map
 
-**A constellation map of any city that you fly with your hands, right in the browser.** Swipe, pinch, point and give a thumbs up. Tick off the city's top places, earn badges and share your constellation. Swap in your own city by editing one file.
+**A constellation map of any city that you fly with your hands, right in the browser.** Grab it with four fingers, zoom with two, point and fold your finger to click, or teach it gestures of your own. Tick off the city's top places, earn badges and share your constellation. Swap in your own city by editing one file.
 
-![Demo: a simulated hand swiping, pointing, opening a place, zooming and rotating the Bengaluru map](docs/demo.gif)
+![Demo: a simulated hand dragging the map with four fingers, pointing, folding a finger to open a place, zooming with two fingers and rotating the Bengaluru map](docs/demo.gif)
 
 **[Live demo](https://anurag12.vercel.app/map)** · [London example](https://anurag12.vercel.app/map?city=london) · [Watch the demo](https://anurag12.vercel.app/map?demo) (no camera needed)
 
@@ -14,13 +14,28 @@ No install, no build step, no server code. Hand tracking runs on your device wit
 
 | Gesture | What it does |
 |---|---|
-| 🖐️ **Swipe your open palm** left, right, up or down | Moves the map that way |
-| 🤏 **Pinch out** (thumb and index apart) | Zooms in |
-| 🤏 **Pinch in** (thumb and index together) | Zooms out |
+| ✋ **Four fingers together**, then move your hand | Drags the map in any direction. Spread your fingers to let go |
+| ✌️ **Two fingers** (index + middle), move **up** | Zooms in |
+| ✌️ **Two fingers**, move **down** | Zooms out |
 | ☝️ **One finger** | Moves the pointer, which snaps onto the nearest place |
-| 👍 **Thumbs up** (hold ⅓ s) | Opens the place under the pointer (or presses the button under it) |
+| 👇 **Fold your index finger and lift it** (while pointing) | Opens the place under the pointer (or presses the button under it) |
 | ✊ **Fist** (hold ⅓ s) | Closes the open place |
 | 🙌 **Two hands**, turned like a steering wheel | Rotates the map |
+| 🖐️ **Open palm, fingers spread** | Rest. Nothing happens |
+
+👍 A thumbs up (hold ⅓ s) still opens a place too.
+
+## Train your own gestures
+
+Press **🧠 Train** (or <kbd>T</kbd>) to teach the map hand shapes of your own:
+
+1. **Name it and pick what it does**: pan, zoom, pointer, click, close, reset view, zoom a step, rotate, open Explore, show my location or help. There's also **Rest** and **Ignore**.
+2. **Press Add.** After a 3-2-1 countdown it records your hand for two seconds (about 60 samples). Move your hand a little nearer, further and tilted while it records, so it learns the shape and not one position.
+3. **Check it.** The live preview shows what it sees and how sure it is. Each gesture shows how often its own samples are recognised and **which other gesture it gets mixed up with**. That's how you spot look-alikes. Fix them by recording more of each, or add an **Ignore** gesture for the shape it should leave alone.
+
+Trained gestures win over the built-in ones when they match, and anything they don't match falls back to the built-in gestures. Pan, zoom and pointer gestures work with movement just like the built-in ones: hold your trained shape and move your hand. Everything is saved in your browser. **Export** writes a JSON file you can **Import** on another device.
+
+How it works (`src/trainer.js`): each frame's 21 hand points are normalised (wrist at the origin, scaled by palm size, left hands mirrored). Then they're described by the points themselves plus finger straightness, thumb position, fingertip gaps and finger spread. Those extra measurements are what keep look-alike poses apart. A k-nearest-neighbour vote compares them with your samples. A match only counts when most neighbours agree **and** the nearest one is about as close as your own samples are to each other. It needs no training step and runs in well under a millisecond.
 
 Tap the **◎ locate button** (bottom right, or <kbd>L</kbd>) to see yourself as a blue dot, like in Google Maps. It follows you as you move; tap it again once you're centred to turn it off. Your location stays on your device.
 
@@ -99,10 +114,12 @@ The gesture engine (`src/gestures.js`) is plain JavaScript with no DOM, so it's 
 
 - **Shape, not position.** Finger poses come from MediaPipe's 3-D *world* landmarks, so they read the same near or far, and with a tilted hand.
 - **Hysteresis.** A new pose must hold for a few frames before it counts, so one bad frame can't trigger anything.
-- **Holds, not flicks.** Thumbs up and fist fire once, after a short hold. A ring around the pointer fills while you hold.
-- **The click lands where you pointed.** When your hand changes shape, the pointer rewinds to where it was just before, so curling into a thumbs up can't knock it off target.
-- **Swipes need intent.** A swipe needs speed, distance and a clear direction. The return stroke is ignored.
-- **No accidental zoom.** Zoom only starts once the thumb–index gap really changes, and never in the split second while your hand changes shape.
+- **"Together" means together.** Four-finger pan measures the angle between neighbouring fingers in the plane of the palm, so a relaxed, spread palm rests and a bent finger doesn't count as spread.
+- **A still hand doesn't move the map.** Dragging starts only once your hand leaves a small dead zone, and the dead zone comes back after you hold still.
+- **No jerks when you change shape.** Pan and zoom only use frames that clearly show the pose, and re-anchor whenever they don't.
+- **The click lands where you pointed.** The pointer freezes the moment your index starts to fold, and rewinds a little. A fold only clicks if it's deep enough and you lift it within about half a second. Hold it folded and it becomes a fist instead.
+- **Holds, not flicks.** Fist, thumbs up and trained commands fire once, after a short hold. A ring around the pointer fills while you hold.
+- **No accidental zoom.** Zoom only starts after your fingers have moved a little, and never in the split second while your hand changes shape.
 - **Two hands win.** While both hands are in view, only rotation works, and there's a short grace period after you drop one.
 
 Every threshold lives in one `DEFAULTS` object at the top of the engine. Pass overrides with `new Gestures.Engine({ holdMs: 400 })`.
@@ -113,7 +130,7 @@ Every threshold lives in one `DEFAULTS` object at the top of the engine. Pass ov
 npm test
 ```
 
-The tests drive the real engine with synthetic hands (`src/synth.js`) at 30 fps. They cover every gesture, tilted and noisy hands, and the robustness rules above. The same synthetic hand powers the **▶ Demo** button.
+The tests drive the real engine with synthetic hands (`src/synth.js`) at 30 fps. They cover every gesture, tilted and noisy hands, the robustness rules above, and the trainer (recognition, fallback, left hands, look-alike reports, import/export). The same synthetic hand powers the **▶ Demo** button.
 
 ## Project structure
 
@@ -121,17 +138,18 @@ The tests drive the real engine with synthetic hands (`src/synth.js`) at 30 fps.
 index.html            page shell; picks the city file
 cities/               one file per city (bengaluru.js, london.js, _template.js)
 src/gestures.js       gesture engine: landmarks in, map commands out
+src/trainer.js        train-your-own gestures: k-nearest neighbours, look-alike check, save/load
 src/explore.js        Explore mode: top-place lists, points, levels, badges
 src/app.js            map drawing, UI, camera, mouse, touch, keyboard, demo
 src/synth.js          synthetic hand generator for tests and the demo
 src/style.css         styles
 tools/csv-to-city.mjs CSV → city config converter
-test/                 engine and Explore tests (node --test)
+test/                 engine, trainer and Explore tests (node --test)
 ```
 
 ## Privacy
 
-The camera feed is processed in your browser and never uploaded. The MediaPipe library and model are downloaded from public CDNs when you turn on hand control.
+The camera feed is processed in your browser and never uploaded. Trained gestures are stored as hand-point coordinates (no images) in your browser's local storage. The MediaPipe library and model are downloaded from public CDNs when you turn on hand control.
 
 ## License
 

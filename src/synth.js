@@ -14,15 +14,16 @@
 
   // Mirrored (selfie) view, metres, x right, y down, palm facing the camera.
   const BASE = {
-    index: { mcp: [-0.025, -0.085], seg: [0.040, 0.025, 0.022], fan: -8 },
+    index: { mcp: [-0.025, -0.085], seg: [0.040, 0.025, 0.022], fan: -12 },
     middle: { mcp: [0.000, -0.090], seg: [0.045, 0.028, 0.024], fan: 0 },
-    ring: { mcp: [0.020, -0.085], seg: [0.042, 0.026, 0.022], fan: 7 },
-    pinky: { mcp: [0.038, -0.075], seg: [0.032, 0.020, 0.020], fan: 15 },
+    ring: { mcp: [0.020, -0.085], seg: [0.042, 0.026, 0.022], fan: 10 },
+    pinky: { mcp: [0.038, -0.075], seg: [0.032, 0.020, 0.020], fan: 20 },
   };
+  const TOGETHER = [3, 0, -2, -5];   // fingers held side by side lean slightly towards the middle finger
   const ORDER = ['index', 'middle', 'ring', 'pinky'];
 
-  function finger(name, curl) {
-    const b = BASE[name], a = rad(b.fan);
+  function finger(name, curl, fan) {
+    const b = BASE[name], a = rad(fan ?? b.fan);
     const pts = [[b.mcp[0], b.mcp[1], 0]];
     let th = 0; const bends = [90, 100, 70].map(x => rad(x * curl));
     for (let i = 0; i < 3; i++) {
@@ -41,6 +42,10 @@
 
   const POSES = {
     open: { curls: [0, 0, 0, 0], thumb: 'side' },
+    flat: { curls: [0, 0, 0, 0], thumb: 'side', together: true },
+    vee: { curls: [0, 0, 1, 1], thumb: 'tucked' },
+    rock: { curls: [0, 1, 1, 0], thumb: 'tucked' },
+    call: { curls: [1, 1, 1, 0], thumb: 'side' },
     point: { curls: [0, 1, 1, 1], thumb: 'tucked' },
     pinch: { curls: [0.3, 1, 1, 1], thumb: 'pinch' },
     thumbsup: { curls: [1, 1, 1, 1], thumb: 'up' },
@@ -49,14 +54,16 @@
   };
 
   /**
-   * opts: pose, spread (0 = pinched shut … 1 = wide, pinch only), x/y (wrist position in the mirrored
+   * opts: pose, curls (override, 0 = straight … 1 = folded, index→pinky), together (0..1, fingers side by side),
+   * spread (0 = pinched shut … 1 = wide, pinch only), x/y (wrist position in the mirrored
    * camera frame, 0..1), size (frame fraction per metre), roll/yaw/pitch (degrees), noise (metres), rand
    */
   function hand(opts = {}) {
     const o = { pose: 'open', spread: 0.5, x: 0.5, y: 0.75, size: 1.7, roll: 0, yaw: 0, pitch: 0, noise: 0, rand: Math.random, ...opts };
     const P = POSES[o.pose] || POSES.open;
     const curls = o.curls || P.curls;
-    const F = ORDER.map((n, i) => finger(n, curls[i]));
+    const tog = o.together ?? (P.together ? 1 : 0);
+    const F = ORDER.map((n, i) => finger(n, curls[i], BASE[n].fan + (TOGETHER[i] - BASE[n].fan) * tog));
     let tip;
     if (P.thumb === 'side') tip = [-0.095, -0.075, -0.01];
     else if (P.thumb === 'tucked') tip = [0.002, -0.050, -0.032];
