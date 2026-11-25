@@ -9,7 +9,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gesture City Map</title>
-<meta name="description" content="A constellation map of any city that you fly with hand gestures, right in the browser. Tick off the top places and earn badges.">
+<meta name="description" content="A constellation map of any city that you fly with hand gestures, right in the browser. Train your own gestures, tick off the top places and earn badges.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Gesture City Map · fly the city with your hands">
 <meta property="og:description" content="A constellation map you fly with hand gestures. Tick off the top places, earn badges and share your constellation.">
@@ -35,6 +35,7 @@
   <div class="btns">
     <button id="btnExplore" data-gx title="Top places, points and badges (X)">🏆<span class="bl"> Explore</span></button>
     <button id="btnHands" data-gx title="Turn on hand control (H)">✋<span class="bl"> Hands</span></button>
+    <button id="btnTrain" data-gx title="Teach the map your own gestures (T)">🧠<span class="bl"> Train</span></button>
     <button id="btnPause" data-gx title="Pause hand control (Space)" hidden>⏸ Pause</button>
     <button id="btnDemo" data-gx title="Watch a simulated hand use every gesture">▶<span class="bl"> Demo</span></button>
     <button id="btnReset" data-gx title="Reset view (R)">↺</button>
@@ -50,10 +51,10 @@
   <div class="cam"><canvas id="cam" width="240" height="180"></canvas><div id="camOff">camera off</div></div>
   <div id="pose"><span id="poseIcon">✋</span><div><b id="poseName">Hand control off</b><small id="poseHint">press ✋ Hands or ▶ Demo</small></div></div>
   <ul id="glist">
-    <li data-g="open"><i>🖐️</i>Swipe palm<span>move the map</span></li>
-    <li data-g="pinch"><i>🤏</i>Pinch out / in<span>zoom in / out</span></li>
+    <li data-g="flat"><i>✋</i>Four fingers<span>drag the map</span></li>
+    <li data-g="vee"><i>✌️</i>Two fingers ↕<span>zoom in / out</span></li>
     <li data-g="point"><i>☝️</i>One finger<span>move pointer</span></li>
-    <li data-g="thumbsup"><i>👍</i>Thumbs up<span>open place</span></li>
+    <li data-g="tap"><i>👇</i>Fold finger<span>open place</span></li>
     <li data-g="fist"><i>✊</i>Fist<span>close place</span></li>
     <li data-g="two"><i>🙌</i>Two hands<span>rotate</span></li>
   </ul>
@@ -67,10 +68,10 @@
   <h2 id="introTitle">Fly the city with your <span>hands</span>.</h2>
   <p class="lead" id="introLead">Every star is a place worth knowing, and every category is its own constellation. Hand tracking runs entirely in your browser, so no video ever leaves your device.</p>
   <div class="ggrid">
-    <div class="gcard"><div class="ge">🖐️ ⇆</div><b>Swipe your palm</b><span>A quick open-hand swipe left, right, up or down moves the map that way.</span></div>
-    <div class="gcard"><div class="ge">🤏</div><b>Pinch out · pinch in</b><span>Spread thumb and index apart to zoom in, bring them together to zoom out.</span></div>
+    <div class="gcard"><div class="ge">✋ ✥</div><b>Four fingers together</b><span>Hold four fingers side by side and move your hand. The map follows, in any direction.</span></div>
+    <div class="gcard"><div class="ge">✌️ ↕</div><b>Two fingers up · down</b><span>Show index and middle finger. Move up to zoom in, down to zoom out.</span></div>
     <div class="gcard"><div class="ge">☝️</div><b>One finger</b><span>Point to move the pointer. It snaps onto the nearest place.</span></div>
-    <div class="gcard"><div class="ge">👍</div><b>Thumbs up</b><span>Hold for a moment to open the place under the pointer.</span></div>
+    <div class="gcard"><div class="ge">👇</div><b>Fold your finger</b><span>While pointing, fold the index finger and lift it again to open the place.</span></div>
     <div class="gcard"><div class="ge">✊</div><b>Fist</b><span>Hold for a moment to close the open place.</span></div>
     <div class="gcard"><div class="ge">🙌</div><b>Two hands</b><span>Show both hands and turn them like a steering wheel to rotate.</span></div>
   </div>
@@ -81,22 +82,34 @@
 <div id="help" class="ov"><div class="panel glass">
   <h2>Gestures <span>and keys</span></h2>
   <div class="ggrid">
-    <div class="gcard"><div class="ge">🖐️</div><b>Open palm, still</b><span>Rest pose. Nothing happens until you swipe.</span></div>
-    <div class="gcard"><div class="ge">⏱</div><b>Holds, not flicks</b><span>Thumbs up and fist fire after about a third of a second, once per gesture. The ring around the pointer fills while you hold.</span></div>
-    <div class="gcard"><div class="ge">🎯</div><b>Click lands where you pointed</b><span>The pointer rewinds to where it was before your hand changed shape.</span></div>
-    <div class="gcard"><div class="ge">↩</div><b>Swipe back is ignored</b><span>Bringing your hand back after a swipe won't swipe the other way.</span></div>
+    <div class="gcard"><div class="ge">🖐️</div><b>Spread palm = rest</b><span>Fingers spread apart do nothing. Close them together to grab the map, spread them to let go.</span></div>
+    <div class="gcard"><div class="ge">🎯</div><b>Click lands where you pointed</b><span>The pointer freezes the moment your finger starts to fold. Fold and lift within half a second; hold it folded and it becomes a fist.</span></div>
+    <div class="gcard"><div class="ge">⏱</div><b>Holds, not flicks</b><span>Fist (close) and thumbs up (also opens) fire after about a third of a second, once per gesture.</span></div>
+    <div class="gcard"><div class="ge">🧠</div><b>Train your own</b><span>Press 🧠 Train (T), record a pose for two seconds and pick what it does. It saves in your browser.</span></div>
     <div class="gcard"><div class="ge">🙌</div><b>Two hands win</b><span>While both hands are in view, only rotation works.</span></div>
     <div class="gcard"><div class="ge">⏸</div><b>Pause any time</b><span>Press Space or the ⏸ button.</span></div>
     <div class="gcard"><div class="ge">🏆</div><b>Explore</b><span>Tick off the top places in each category, earn points and badges, and share your constellation.</span></div>
   </div>
-  <div class="keys"><kbd>drag</kbd> pan · <kbd>scroll</kbd> zoom · <kbd>click</kbd> open · <kbd>Esc</kbd> close · <kbd>←↑→↓</kbd> pan · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>Q</kbd><kbd>E</kbd> rotate · <kbd>R</kbd> reset · <kbd>/</kbd> search · <kbd>H</kbd> hands · <kbd>X</kbd> explore · <kbd>L</kbd> my location · <kbd>Space</kbd> pause</div>
+  <div class="keys"><kbd>drag</kbd> pan · <kbd>scroll</kbd> zoom · <kbd>click</kbd> open · <kbd>Esc</kbd> close · <kbd>←↑→↓</kbd> pan · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>Q</kbd><kbd>E</kbd> rotate · <kbd>R</kbd> reset · <kbd>/</kbd> search · <kbd>H</kbd> hands · <kbd>X</kbd> explore · <kbd>L</kbd> my location · <kbd>T</kbd> train gestures · <kbd>Space</kbd> pause</div>
   <div class="cta"><button class="closeHelp" data-gx>Close</button></div>
 </div></div>
+
+<aside id="train" class="glass" hidden aria-label="Train gestures">
+  <div class="th"><b>🧠 Train gestures</b><button id="trainClose" class="x" data-gx aria-label="Close">✕</button></div>
+  <p class="tsub">Teach the map your own hand shapes. Name a gesture, pick what it does, then record it for two seconds.</p>
+  <div class="tlive"><canvas id="tcam" width="320" height="240"></canvas><div id="tcount"></div><div id="tpred"><b>Camera off</b><small>Recording turns it on</small></div></div>
+  <div class="tadd"><input id="tname" maxlength="40" placeholder="Name, e.g. Rock 🤘" autocomplete="off"><select id="taction" aria-label="What it does"></select><button id="tadd" class="pri" data-gx>+ Add</button></div>
+  <ul id="tlist"></ul>
+  <label class="tsw"><input type="checkbox" id="tenabled" checked> Use my trained gestures</label>
+  <div class="tfoot"><button id="texport" data-gx>⤓ Export</button><button id="timport" data-gx>⤒ Import</button><button id="tclear" data-gx>Clear all</button><input type="file" id="tfile" accept=".json,application/json" hidden></div>
+  <p class="fine">Tips: while recording, move your hand a little nearer, further and tilted so it learns the pose, not one position. If two gestures get mixed up, record more of each, or add an <b>Ignore</b> gesture for the shape it should leave alone. Trained gestures win over the built-in ones when they match.</p>
+</aside>
 
 <div id="explore" class="ov"><div class="panel glass xpanel"><button class="x closeX" data-gx aria-label="Close">✕</button><div id="xpBody"></div></div></div>
 <div id="share" class="ov"><div class="panel glass spanel"><button class="x closeX" data-gx aria-label="Close">✕</button><div id="shareBody"></div></div></div>
 
 <script src="src/gestures.js"></script>
+<script src="src/trainer.js"></script>
 <script src="src/explore.js"></script>
 <script src="src/synth.js"></script>
 <script>
